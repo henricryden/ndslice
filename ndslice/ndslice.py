@@ -829,6 +829,56 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     
             self.widgets['buttons']['primary'][self.selected_indices[0]].setChecked(True)
             self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        key = event.key()
+        modifiers = event.modifiers()
+        
+        # Check CTRL+number for colormap changes
+        if modifiers == Qt.QtCore.Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.QtCore.Qt.Key.Key_1:
+                self.setColormap('gray')
+                event.accept()
+                return
+            elif key == Qt.QtCore.Qt.Key.Key_2:
+                self.setColormap('viridis')
+                event.accept()
+                return
+            elif key == Qt.QtCore.Qt.Key.Key_3:
+                self.setColormap('plasma')
+                event.accept()
+                return
+            elif key == Qt.QtCore.Qt.Key.Key_4:
+                self.setColormap('PAL-relaxed')
+                event.accept()
+                return
+            
+        
+        # Pass event to parent if not handled
+        super().keyPressEvent(event)
+    
+    def setColormap(self, colormap_name):
+        """Set the colormap for the image view"""
+        try:
+            if colormap_name == 'gray':
+                colormap = pg.colormap.get('gray', source='matplotlib')
+            elif colormap_name == 'viridis':
+                colormap = pg.colormap.get('viridis')
+            elif colormap_name == 'PAL-relaxed':
+                colormap = pg.colormap.get('PAL-relaxed')
+            elif colormap_name == 'plasma':
+                colormap = pg.colormap.get('plasma')
+            else:
+                print(f"Unknown colormap: {colormap_name}")
+                return
+            
+            # Apply colormap to the image view
+            self.img_view.setColorMap(colormap)
+            #self.current_colormap = colormap_name
+            
+        except Exception as e:
+            print(f"Failed to set colormap {colormap_name}: {e}")
         
 def ndslice(data, title=''):
     if not isinstance(data, np.ndarray):
