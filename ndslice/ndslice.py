@@ -34,6 +34,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.selected_indices = []
         self.channel = None
         self.scale = None
+        
+        # Detect dark mode
+        self.is_dark_mode = self._detect_dark_mode()
         for dim in range(0,data.ndim):
             if self.singleton[dim] is False and len(self.selected_indices) < 2:
                 self.selected_indices.append(dim)
@@ -188,7 +191,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Channel controls - horizontal layout to save space
         channel_group = QtWidgets.QGroupBox("Channel")
-        channel_group.setStyleSheet("QGroupBox { background-color: #F7FFE6; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        
+        if not self.is_dark_mode:
+            channel_group.setStyleSheet("QGroupBox { background-color: #F7FFE6; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        else:
+            channel_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
         channel_layout = QtWidgets.QHBoxLayout()
         channel_layout.setSpacing(5)
         channel_layout.setContentsMargins(3, 3, 3, 3)
@@ -205,7 +212,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Processing controls - horizontal layout
         processing_group = QtWidgets.QGroupBox("Scale")
-        processing_group.setStyleSheet("QGroupBox { background-color: #F4E6FF; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        if not self.is_dark_mode:
+            processing_group.setStyleSheet("QGroupBox { background-color: #F4E6FF; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        else:
+            processing_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
         processing_layout = QtWidgets.QHBoxLayout()
         processing_layout.setSpacing(5)
         processing_layout.setContentsMargins(3, 3, 3, 3)
@@ -221,7 +231,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Display controls - horizontal layout
         self.display_group = QtWidgets.QGroupBox("Display")
-        self.display_group.setStyleSheet("QGroupBox { background-color: #e6f3ff; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        if not self.is_dark_mode:
+            self.display_group.setStyleSheet("QGroupBox { background-color: #e6f3ff; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        else:
+            self.display_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
         display_layout = QtWidgets.QHBoxLayout()
         display_layout.setSpacing(5)
         display_layout.setContentsMargins(3, 3, 3, 3)
@@ -404,6 +417,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
+    
+    def _detect_dark_mode(self):
+        try:
+            palette = QtWidgets.QApplication.instance().palette()
+            bg_color = palette.color(QtGui.QPalette.Window)
+            return bg_color.lightness() < 128
+        except:
+            return False # assume light
     
     def dimClicked(self, event, label, dim):
         if self.singleton[dim]:
