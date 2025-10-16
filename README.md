@@ -31,6 +31,7 @@ ndslice(complex_data, title='3D Complex Gaussian')
 Data slicing and dimension selection should be intuitive: click the two dimensions you want to show and slice using the spinboxes.
 
 **Centered FFT** - Click dimension labels to apply centered 1D FFT transforms. Useful for checking k-space data in MRI reconstructions or analyzing frequency content.
+![FFT](docs/images/fft.gif)
 
 **Line plot** - See 1D slices through your data. Shift+scroll for Y zoom, Ctrl+scroll for X zoom:
 
