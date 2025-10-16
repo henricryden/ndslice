@@ -1,15 +1,54 @@
 # ndslice
 
-Interactive N-dimensional array viewer with FFT support for NumPy arrays.
+**Quick interactive visualization for N-dimensional NumPy arrays**
+
+A python package for browsing slices, applying FFTs, and inspecting data.
+
+Quickly checking multi-dimensional data usually means writing the same matplotlib boilerplate over and over. This tool lets you just call `ndslice(data)` and interactively explore what you've got.
+
+## Usage
+```python
+from ndslice import ndslice
+import numpy as np
+
+# Create some data
+x = np.linspace(-5, 5, 100)
+y = np.linspace(-5, 5, 100)
+z = np.linspace(-5, 5, 50)
+X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+
+mag = np.exp(-(X**2 + Y**2 + Z**2) / 10)
+pha = np.pi/4 * (X + Y + Z)
+complex_data = mag * np.exp(1j * pha)
+
+ndslice(complex_data, title='3D Complex Gaussian')
+```
+
+![Showcase](docs/images/showcase.gif)
 
 ## Features
 
-- **N-dimensional slicing**: View any 2D slice of your N-dimensional data
-- **Multiple view modes**: Image view and line plot modes
-- **FFT/IFFT support**: Apply Fourier transforms along any dimension with a click
-- **Complex data support**: View real, imaginary, magnitude, or phase components
-- **Scale transformations**: Linear and symmetric logarithmic scaling
-- **Interactive controls**: Mouse hover for pixel values, dynamic zooming, and panning
+Data slicing and dimension selection should be intuitive: click the two dimensions you want to show and slice using the spinboxes.
+
+**Centered FFT** - Click dimension labels to apply centered 1D FFT transforms. Useful for checking k-space data in MRI reconstructions or analyzing frequency content.
+
+**Line plot** - See 1D slices through your data. Shift+scroll for Y zoom, Ctrl+scroll for X zoom:
+
+![Line plot](docs/images/lineplot.png)
+
+**Scaling**
+
+Log scaling is often good for k-space visualization.
+Symmetric log scaling is an extension of the log scale which supports negative values.
+
+
+**Colormap**
+Change colormap:
+- `Ctrl+1` Grayscale
+- `Ctrl+2` Viridis
+- `Ctrl+3` Plasma
+- `Ctrl+4` Rainbow
+
 
 ## Installation
 
@@ -26,39 +65,6 @@ git clone https://github.com/henricryden/ndslice.git
 cd ndslice
 pip install -e .
 ```
-
-## Usage
-
-### Basic Usage
-
-The `ndslice()` function opens an interactive window to explore your N-dimensional arrays:
-
-```python
-from ndslice import ndslice
-import numpy as np
-
-# View a 4D array
-data_4d = np.random.randn(10, 20, 30, 40)
-ndslice(data_4d)
-
-# View complex FFT data
-fft_data = np.fft.fftn(data_4d)
-ndslice(fft_data, title='FFT Data')
-```
-
-### Interactive Features
-
-- **Dimension Selection**: Click Y/X buttons to choose which dimensions to display
-- **Slicing**: Use spinboxes to select the slice index for other dimensions
-- **FFT Transforms**: 
-  - Left-click dimension labels to apply FFT
-  - Right-click to apply inverse FFT
-  - Click again to return to native domain
-- **Channel Selection** (for complex data): Real, Imaginary, Magnitude, or Phase
-- **Scale Options**: Linear or Symmetric Log scaling
-- **Display Modes**: Square pixels, square FOV, or fit to window
-- **View Modes**: Switch between 2D image view and 1D line plot
-- **Complex Data**: View real, imaginary, magnitude, or phase components
 
 ## Requirements
 
@@ -78,3 +84,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 Built with [PyQtGraph](https://www.pyqtgraph.org/) for high-performance visualization.
+
+
+---
+Henric Rydén
+
+Karolinska University Hospital
+
+Stockholm, Sweden
