@@ -220,8 +220,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         controls_layout.addWidget(processing_group)
         
         # Display controls - horizontal layout
-        display_group = QtWidgets.QGroupBox("Display")
-        display_group.setStyleSheet("QGroupBox { background-color: #e6f3ff; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        self.display_group = QtWidgets.QGroupBox("Display")
+        self.display_group.setStyleSheet("QGroupBox { background-color: #e6f3ff; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
         display_layout = QtWidgets.QHBoxLayout()
         display_layout.setSpacing(5)
         display_layout.setContentsMargins(3, 3, 3, 3)
@@ -237,8 +237,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.widgets['buttons']['display']['square_fov'].setToolTip('Lock aspect to image width/height ratio')
         self.widgets['buttons']['display']['fit'].setToolTip('Always fit entire image in viewport')
         
-        display_group.setLayout(display_layout)
-        controls_layout.addWidget(display_group)
+        self.display_group.setLayout(display_layout)
+        controls_layout.addWidget(self.display_group)
         
         # Add stretch to push everything to the top
         controls_layout.addStretch()
@@ -257,6 +257,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.image_tab_layout.addWidget(self.img_view)
         self.image_tab.setLayout(self.image_tab_layout)
         self.img_view.getView().scene().sigMouseMoved.connect(lambda pos: self.getPixel(pos))
+        
+        # Connect to view range changes to update aspect ratio in fit mode
+        self.img_view.getView().sigRangeChanged.connect(self._on_view_range_changed)
         
         # Create line plot tab
         self.plot_tab = QtWidgets.QWidget()
@@ -534,8 +537,56 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.img_view.setDisplayMode('square_fov')
         elif self.widgets['buttons']['display']['fit'].isChecked():
             self.img_view.setDisplayMode('fit')
+
+        # Update the display group title
+        self._update_display_group_title()
+
         # Force update to ensure view changes immediately
         self.update_image_view()
+
+    def _update_display_group_title(self):
+        """Update the display group title with aspect ratio information."""
+        mode = self.img_view.displayMode
+        aspect_str = ''
+        
+        if mode == 'square_pixels': # Simple
+            self.display_group.setTitle('Display (1:1)')
+            return
+        
+        if mode == 'fit': #use the viewport aspect ratio
+            try:
+                view = self.img_view.getView()
+                view_rect = view.viewRect()
+                if view_rect.width() > 0 and view_rect.height() > 0:
+                    # Get the actual widget size to calculate viewport aspect ratio
+                    widget_size = view.size()
+                    viewport_ratio = widget_size.width() / widget_size.height()
+                    if abs(viewport_ratio - 1.0) < 1e-2:
+                        aspect_str = '(1:1)'
+                    else:
+                        aspect_str = f'({viewport_ratio:.2f}:1)'
+                else:
+                    aspect_str = ''
+            except:
+                aspect_str = ''
+            self.display_group.setTitle(f'Display {aspect_str}')
+            
+        elif mode == 'square_fov':
+            # For square FOV, use the image aspect ratio
+            if hasattr(self.img_view, 'image') and self.img_view.image is not None:
+                shape = self.img_view.image.shape
+                if len(shape) == 2:
+                    height, width = shape
+                    ratio = width / height
+                    if abs(ratio - 1.0) < 1e-2:
+                        aspect_str = '(1:1)'
+                    else:
+                        aspect_str = f'({ratio:.2f}:1)'
+                else:
+                    aspect_str = ''
+            self.display_group.setTitle(f'Display {aspect_str}')
+        else:
+            self.display_group.setTitle('Display')
     
     def update_line_plot(self):
         """Update the line plot with 1D data slices"""
@@ -634,6 +685,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.line_curve.setPen(new_pen)
         except Exception as e:
             print(f"Thickness update failed: {e}")
+
+    def _on_view_range_changed(self):
+        """Update display group title when view range changes (for fit mode)."""
+        self._update_display_group_title()
 
     def _on_plot_hover(self, pos):
         """Handle mouse hover over the line plot: update pixelValue label."""
