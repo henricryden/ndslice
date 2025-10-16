@@ -40,8 +40,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         for dim in range(0,data.ndim):
             if self.singleton[dim] is False and len(self.selected_indices) < 2:
                 self.selected_indices.append(dim)
-        if len(self.selected_indices) < 2:
+        # For 1D arrays, we only need one dimension; for 2D+, ensure we have two
+        if len(self.selected_indices) < 2 and data.ndim >= 2:
             self.selected_indices = [0, 1]
+        elif len(self.selected_indices) == 0:
+            # Edge case: if all dimensions are singleton, pick first one
+            self.selected_indices = [0]
         
         # Line plot mode uses a single selected dimension
         self.line_plot_dimension = 0  # Default to first non-singleton dimension
@@ -378,6 +382,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.tab_widget.addTab(self.image_tab, "Image View")
         self.tab_widget.addTab(self.plot_tab, "Line Plot")
         
+        if data.ndim == 1:
+            self.tab_widget.setTabEnabled(0, False)  # Disable Image View tab
+            self.tab_widget.setCurrentIndex(1)  # Set line plot as default
+        
         # Connect tab change handler
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
         
@@ -412,8 +420,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         tmp.setLayout(self.layouts['main'])
         self.setCentralWidget(tmp)
         
-        self.changedIndex(True, 0, self.selected_indices[0], update=False)
-        self.changedIndex(True, 1, self.selected_indices[1], update=False)
+        # Initialize dimension controls based on data dimensions
+        if len(self.selected_indices) >= 1:
+            self.changedIndex(True, 0, self.selected_indices[0], update=False)
+        if len(self.selected_indices) >= 2:
+            self.changedIndex(True, 1, self.selected_indices[1], update=False)
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
@@ -487,6 +498,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     
     def update_image_view(self):
+        if self.data.ndim == 1: # No image view for 1D data
+            return
+            
         prev_levels = None
         al = True
         def_levels = None
@@ -788,7 +802,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.line_plot_dimension = idx
         else:
             # In image view mode, use the original two-dimension selection
-            self.selected_indices[which_one] = idx
+            # For 1D arrays, we don't have a second dimension
+            if which_one < len(self.selected_indices):
+                self.selected_indices[which_one] = idx
         
         self.update_dimension_controls()
         if update is True:
@@ -848,8 +864,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     bPrim.setChecked(False)
                     bSecondary.setChecked(False)
                     
-            self.widgets['buttons']['primary'][self.selected_indices[0]].setChecked(True)
-            self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
+            # Only set buttons if we have at least 2 selected indices
+            if len(self.selected_indices) >= 1:
+                self.widgets['buttons']['primary'][self.selected_indices[0]].setChecked(True)
+            if len(self.selected_indices) >= 2:
+                self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
