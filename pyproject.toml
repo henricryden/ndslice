@@ -46,3 +46,6 @@ Repository = "https://github.com/henricryden/ndslice"
 
 [tool.setuptools]
 packages = ["ndslice"]
+
+[project.scripts]
+ndslice = "ndslice.cli:main"
