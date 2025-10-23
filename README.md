@@ -26,6 +26,22 @@ ndslice(complex_data, title='3D Complex Gaussian')
 
 ![Showcase](docs/images/showcase.gif)
 
+
+### Command Line
+```bash
+ndslice data.npy # Numpy file
+ndslice --help   # Show all options
+```
+
+**HDF5 support** (requires `pip install h5py`):
+```bash
+ndslice data.h5 
+```
+
+The CLI automatically detects and loads the largest multidimensional dataset in HDF5 files
+Handles both real and complex data (including compound dtypes with real/imag fields).
+
+
 ## Features
 
 Data slicing and dimension selection should be intuitive: click the two dimensions you want to show and slice using the spinboxes.
@@ -69,6 +85,7 @@ ndslice(data2)  # Shown after first closes
 
 ```bash
 pip install ndslice
+pip install h5py # Optional for HDF5 CLI support
 ```
 
 ### From source
@@ -76,8 +93,13 @@ pip install ndslice
 ```bash
 git clone https://github.com/henricryden/ndslice.git
 cd ndslice
+
+# Use directly without installing
+python -m ndslice data.npy
+
 pip install -e .
 ```
+
 
 ## Requirements
 
@@ -85,6 +107,7 @@ pip install -e .
 - NumPy >= 1.20.0
 - PyQtGraph >= 0.12.0
 - PyQt5 >= 5.15.0
+- h5py >= 3.0.0 (for HDF5 file support in CLI)
 
 ## License
 
