@@ -50,7 +50,19 @@ Change colormap:
 - `Ctrl+3` Plasma
 - `Ctrl+4` Rainbow
 
+**Non-blocking windows**
 
+By default, windows open in separate processes, allowing multiple simultaneous views:
+```python
+ndslice(data1)
+ndslice(data2) # Both windows appear
+```
+
+Use `block=True` to wait for the window to close before continuing:
+```python
+ndslice(data1, block=True)  # Script pauses here
+ndslice(data2)  # Shown after first closes
+```
 ## Installation
 
 ### From PyPI

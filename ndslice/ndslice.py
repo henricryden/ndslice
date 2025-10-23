@@ -5,6 +5,7 @@ from pyqtgraph.Qt import QtWidgets, QtGui
 import math
 from enum import Enum
 from .imageview2d import ImageView2D
+import multiprocessing as mp
 
 def symlog(data, C = 0):
     return np.sign(data) * np.log10( 1 + np.abs(data) / 10**C)
@@ -920,12 +921,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Failed to set colormap {colormap_name}: {e}")
         
-def ndslice(data, title=''):
-    if not isinstance(data, np.ndarray):
-        raise TypeError("data must be a numpy array")
-    if data.ndim < 1:
-        raise ValueError("data must have at least 1 dimension")
-    
+def _run_window(data, title):
+    """Opens a window in a separate process which is blocked on exec()"""
     app = QtWidgets.QApplication.instance()
     if app is None:
         app = QtWidgets.QApplication([])
@@ -933,4 +930,15 @@ def ndslice(data, title=''):
     win.setWindowTitle(title)
     win.show()
     app.exec()
+
+def ndslice(data, title='', block=False):
+    if not isinstance(data, np.ndarray):
+        raise TypeError("data must be a numpy array")
+    if data.ndim < 1:
+        raise ValueError("data must have at least 1 dimension")
+    
+    if block:
+        _run_window(data, title)
+    else:
+        process = mp.Process(target=_run_window, args=(data, title)).start()
     
