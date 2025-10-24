@@ -25,6 +25,13 @@ class Domain(Enum):
     FOURIER=1
 
 class NDSliceWindow(QtWidgets.QMainWindow):
+    # Styling constants
+    DIMENSION_LABEL_STYLE = "QLabel { font-size: 12px; padding: 1px; margin: 2px; }"
+    FLIP_ICON_STYLE = "QLabel { font-size: 20px; padding: 0px; margin: 0px; }"
+    BUTTON_STYLE = "QPushButton { font-size: 12px; padding: 2px; margin: 2px; }"
+    SPINBOX_STYLE = "QSpinBox { font-size: 12px; }"
+    RADIO_BUTTON_STYLE = "QRadioButton { font-size: 11px; }"
+    GROUPBOX_BASE_STYLE = "QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }"
 
     def __init__(self, data, *args, **kwargs):
         super(NDSliceWindow, self).__init__(*args, **kwargs)
@@ -38,8 +45,6 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         self.axis_flipped = [False] * data.ndim  # Track flip state so that one can toggle dims and come back to the same flip state
         
-        # Detect dark mode
-        self.is_dark_mode = self._detect_dark_mode()
         for dim in range(0,data.ndim):
             if self.singleton[dim] is False and len(self.selected_indices) < 2:
                 self.selected_indices.append(dim)
@@ -147,24 +152,20 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Set up flip labels with click handlers
         for i, flip_label in enumerate(self.widgets['labels']['flip']):
             flip_label.mousePressEvent = lambda event, i=i: self.flipAxisClicked(event, i)
-            flip_label.setStyleSheet("QLabel { font-size: 20px; padding: 0px; margin: 0px; }")
+            flip_label.setStyleSheet(self.FLIP_ICON_STYLE)
             flip_label.setAlignment(Qt.QtCore.Qt.AlignLeft | Qt.QtCore.Qt.AlignVCenter)
         
         # Apply compact styling to dimension control widgets
-        
-        # Make dimension labels much more compact
         for label in self.widgets['labels']['dims']:
-            label.setStyleSheet("QLabel { font-size: 12px; padding: 1px; margin: 2px; }")
+            label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
             label.setFixedHeight(24)
             label.setMinimumWidth(30)
         
-        # Make dimension buttons more compact
         for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
-            btn.setStyleSheet("QPushButton { font-size: 12px; padding: 2px; margin: 2px; }")
+            btn.setStyleSheet(self.BUTTON_STYLE)
             
-        # Make spinboxes more compact
         for spin in self.widgets['spins']['slice_indices']:
-            spin.setStyleSheet("QSpinBox { font-size: 12px; }")
+            spin.setStyleSheet(self.SPINBOX_STYLE)
         
         # Set minimal spacing for all control layouts
         self.layouts['dims'].setSpacing(2)  # Extra tight for dimensions row
@@ -227,18 +228,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Channel controls - horizontal layout to save space
         channel_group = QtWidgets.QGroupBox("Channel")
-        
-        if not self.is_dark_mode:
-            channel_group.setStyleSheet("QGroupBox { background-color: #F7FFE6; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
-        else:
-            channel_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        channel_group.setStyleSheet(self.GROUPBOX_BASE_STYLE)
         channel_layout = QtWidgets.QHBoxLayout()
         channel_layout.setSpacing(5)
         channel_layout.setContentsMargins(3, 3, 3, 3)
         
         buttons = list(self.widgets['buttons']['channel'].values())
         for btn in buttons:
-            btn.setStyleSheet("QRadioButton { font-size: 11px; }")
+            btn.setStyleSheet(self.RADIO_BUTTON_STYLE)
             self.channel_button_group.addButton(btn)
             channel_layout.addWidget(btn)
             btn.clicked.connect(self.update)
@@ -248,17 +245,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Processing controls - horizontal layout
         processing_group = QtWidgets.QGroupBox("Scale")
-        if not self.is_dark_mode:
-            processing_group.setStyleSheet("QGroupBox { background-color: #F4E6FF; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
-        else:
-            processing_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        processing_group.setStyleSheet(self.GROUPBOX_BASE_STYLE)
         processing_layout = QtWidgets.QHBoxLayout()
         processing_layout.setSpacing(5)
         processing_layout.setContentsMargins(3, 3, 3, 3)
         
         proc_buttons = list(self.widgets['buttons']['processing'].values())
         for btn in proc_buttons:
-            btn.setStyleSheet("QRadioButton { font-size: 11px; }")
+            btn.setStyleSheet(self.RADIO_BUTTON_STYLE)
             processing_layout.addWidget(btn)
             btn.clicked.connect(self.update)
         
@@ -267,17 +261,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Display controls - horizontal layout
         self.display_group = QtWidgets.QGroupBox("Display")
-        if not self.is_dark_mode:
-            self.display_group.setStyleSheet("QGroupBox { background-color: #e6f3ff; font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
-        else:
-            self.display_group.setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }")
+        self.display_group.setStyleSheet(self.GROUPBOX_BASE_STYLE)
         display_layout = QtWidgets.QHBoxLayout()
         display_layout.setSpacing(5)
         display_layout.setContentsMargins(3, 3, 3, 3)
         
         disp_buttons = list(self.widgets['buttons']['display'].values())
         for btn in disp_buttons:
-            btn.setStyleSheet("QRadioButton { font-size: 11px; }")
+            btn.setStyleSheet(self.RADIO_BUTTON_STYLE)
             display_layout.addWidget(btn)
             btn.clicked.connect(self.update_display_mode)
         
@@ -462,14 +453,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
-    
-    def _detect_dark_mode(self):
-        try:
-            palette = QtWidgets.QApplication.instance().palette()
-            bg_color = palette.color(QtGui.QPalette.Window)
-            return bg_color.lightness() < 128
-        except:
-            return False # assume light
+
+
+
+
     
     def dimClicked(self, event, label, dim):
         if self.singleton[dim]:
