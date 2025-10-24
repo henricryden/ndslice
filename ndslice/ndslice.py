@@ -517,24 +517,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def update_flip_icons(self):
         for i, flip_label in enumerate(self.widgets['labels']['flip']):
             if i in self.selected_indices:
-                if i == self.selected_indices[0]:
+                # In line plot mode, only show horizontal flip icon for the plot dimension
+                if self.is_line_plot_mode():
+                    if i == self.line_plot_dimension:
+                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
+                        flip_label.setToolTip("Flip X axis")
+                        if self.axis_flipped[i]:
+                            flip_label.setText('⬅️')    
+                        else:
+                            flip_label.setText('➡️')
+                    else:
+                        flip_label.setText('')  # Hide flip icons for non-plot dimensions
+                        flip_label.setToolTip('')
+                # In image view mode, show vertical flip for primary, horizontal for secondary
+                elif i == self.selected_indices[0]:
+                    flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeVerCursor))
+                    flip_label.setToolTip("Flip Y")
                     if self.axis_flipped[i]:
                         flip_label.setText('⬇️')
-                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeVerCursor))
-                        flip_label.setToolTip("Flip Y")
                     else:
                         flip_label.setText('⬆️')
-                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeVerCursor))
-                        flip_label.setToolTip("Flip Y")
                 elif len(self.selected_indices) > 1 and i == self.selected_indices[1]:
+                    flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
+                    flip_label.setToolTip("Flip X")
                     if self.axis_flipped[i]:
                         flip_label.setText('⬅️')
-                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
-                        flip_label.setToolTip("Flip X")
                     else:
                         flip_label.setText('➡️')
-                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
-                        flip_label.setToolTip("Flip X")
                 else:
                     flip_label.setText('')  # Clear for dimensions not in primary/secondary
                     flip_label.setToolTip('')
@@ -543,19 +552,25 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 flip_label.setToolTip('')
     
     def apply_axis_flips(self):
-        if self.data.ndim == 1:  # No axis flipping for 1D data
-            return
-            
-        view = self.img_view.getView()
-        
-        # Y axis
-        y_dim = self.selected_indices[0]
-        view.invertY(self.axis_flipped[y_dim])
 
-        # X axis
-        if len(self.selected_indices) > 1:
-            x_dim = self.selected_indices[1]
-            view.invertX(self.axis_flipped[x_dim])
+        
+        if self.is_line_plot_mode():
+            plot_view = self.plot_widget.getViewBox()
+            plot_dim = self.line_plot_dimension
+            plot_view.invertX(self.axis_flipped[plot_dim])
+        else:
+            if self.data.ndim == 1: # Shouldn't ever be in view mode for 1D data
+                return
+            
+            view = self.img_view.getView()
+            
+            y_dim = self.selected_indices[0]
+            view.invertY(self.axis_flipped[y_dim])
+
+            if len(self.selected_indices) > 1:
+                x_dim = self.selected_indices[1]
+                view.invertX(self.axis_flipped[x_dim])
+
     
     def getPixel(self, pos):
         img = self.img_view.image
