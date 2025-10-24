@@ -682,22 +682,22 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             return
         
         if mode == 'fit': #use the viewport aspect ratio
+            aspect_str = ''
             try:
-                view = self.img_view.getView()
-                view_rect = view.viewRect()
-                if view_rect.width() > 0 and view_rect.height() > 0:
-                    # Get the actual widget size to calculate viewport aspect ratio
-                    widget_size = view.size()
-                    viewport_ratio = widget_size.width() / widget_size.height()
-                    if abs(viewport_ratio - 1.0) < 1e-2:
+                if hasattr(self.img_view, 'image') and self.img_view.image is not None:
+                    view = self.img_view.getView()
+                    
+                    img_height, img_width = self.img_view.image.shape
+                    widget_ratio = view.size().width() / view.size().height()
+                    img_ratio = img_width / img_height
+                    ratio = img_ratio * widget_ratio
+                    
+                    if abs(ratio - 1.0) < 1e-2:
                         aspect_str = '(1:1)'
                     else:
-                        aspect_str = f'({viewport_ratio:.2f}:1)'
-                else:
-                    aspect_str = ''
-            except:
-                aspect_str = ''
-            self.display_group.setTitle(f'Display {aspect_str}')
+                        aspect_str = f'({ratio:.2f}:1)'
+            finally:
+                self.display_group.setTitle(f'Display {aspect_str}')
             
         elif mode == 'square_fov':
             # For square FOV, use the image aspect ratio
