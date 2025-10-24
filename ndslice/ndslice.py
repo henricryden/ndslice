@@ -36,6 +36,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.channel = None
         self.scale = None
         
+        self.axis_flipped = [False] * data.ndim  # Track flip state so that one can toggle dims and come back to the same flip state
+        
         # Detect dark mode
         self.is_dark_mode = self._detect_dark_mode()
         for dim in range(0,data.ndim):
@@ -81,6 +83,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             },
             'labels': {
                 'dims': [QtWidgets.QLabel('[' + str(data.shape[i]) + ']', alignment=Qt.QtCore.Qt.AlignCenter) for i in range(data.ndim)],
+                'flip': [QtWidgets.QLabel('', alignment=Qt.QtCore.Qt.AlignCenter) for i in range(data.ndim)],
                 'primary': QtWidgets.QLabel('Y'),
                 'secondary': QtWidgets.QLabel('X'),
                 'slice': QtWidgets.QLabel('Slice'),
@@ -137,28 +140,31 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         for i, label in enumerate(self.widgets['labels']['dims']):
             label.mousePressEvent = lambda event, i=i, l=label: self.dimClicked(event, l, i)
-        self.widgets['labels']['primary'].mousePressEvent = self.transposeView
+            label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.PointingHandCursor))
+            label.setToolTip(f"Apply centered FFT along dim {i}")
+
+        
+        # Set up flip labels with click handlers
+        for i, flip_label in enumerate(self.widgets['labels']['flip']):
+            flip_label.mousePressEvent = lambda event, i=i: self.flipAxisClicked(event, i)
+            flip_label.setStyleSheet("QLabel { font-size: 20px; padding: 0px; margin: 0px; }")
+            flip_label.setAlignment(Qt.QtCore.Qt.AlignLeft | Qt.QtCore.Qt.AlignVCenter)
         
         # Apply compact styling to dimension control widgets
-        self.widgets['labels']['dimensions'].setStyleSheet("QLabel { font-size: 11px; font-weight: bold; padding: 1px; margin: 2px; }")
-        self.widgets['labels']['dimensions'].setFixedHeight(18)  # Match the dimension labels height
-        self.widgets['labels']['primary'].setStyleSheet("QLabel { font-size: 11px; font-weight: bold; }")
-        self.widgets['labels']['secondary'].setStyleSheet("QLabel { font-size: 11px; font-weight: bold; }")
-        self.widgets['labels']['slice'].setStyleSheet("QLabel { font-size: 11px; font-weight: bold; }")
         
         # Make dimension labels much more compact
         for label in self.widgets['labels']['dims']:
-            label.setStyleSheet("QLabel { font-size: 11px; padding: 1px; margin: 2px; }")
-            label.setFixedHeight(18)  # Force a much smaller height
-            label.setMinimumWidth(30)  # Ensure minimum readability
+            label.setStyleSheet("QLabel { font-size: 12px; padding: 1px; margin: 2px; }")
+            label.setFixedHeight(24)
+            label.setMinimumWidth(30)
         
         # Make dimension buttons more compact
         for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
-            btn.setStyleSheet("QPushButton { font-size: 11px; padding: 3px; margin: 2px; }")
+            btn.setStyleSheet("QPushButton { font-size: 12px; padding: 2px; margin: 2px; }")
             
         # Make spinboxes more compact
         for spin in self.widgets['spins']['slice_indices']:
-            spin.setStyleSheet("QSpinBox { font-size: 11px; }")
+            spin.setStyleSheet("QSpinBox { font-size: 12px; }")
         
         # Set minimal spacing for all control layouts
         self.layouts['dims'].setSpacing(2)  # Extra tight for dimensions row
@@ -170,29 +176,54 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.layouts['slice'].setSpacing(2)  # Tighter spacing
         self.layouts['slice'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
         
-        self.layouts['dims'].addWidget(self.widgets['labels']['dimensions'])
-        [self.layouts['dims'].addWidget(w) for w in self.widgets['labels']['dims']]
+        # For each dimension, create a QVBoxLayout with flip icon + dim label above primary button
+        dim_containers = []
+        for i in range(data.ndim):
+            # Create a container widget for this dimension column
+            container = QtWidgets.QWidget()
+            container_layout = QtWidgets.QVBoxLayout()
+            container_layout.setSpacing(0)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Create horizontal layout for flip icon + dimension label
+            label_row = QtWidgets.QWidget()
+            label_layout = QtWidgets.QHBoxLayout()
+            label_layout.setSpacing(0)
+            label_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Add flip icon (left-aligned)
+            label_layout.addWidget(self.widgets['labels']['flip'][i])
+            # Add dimension label (centered, takes remaining space)
+            self.widgets['labels']['dims'][i].setAlignment(Qt.QtCore.Qt.AlignCenter)
+            label_layout.addWidget(self.widgets['labels']['dims'][i], 1)
+            
+            label_row.setLayout(label_layout)
+            container_layout.addWidget(label_row)
+            
+            container.setLayout(container_layout)
+            dim_containers.append(container)
+            self.layouts['dims'].addWidget(container)
         
-        self.layouts['primary'].addWidget(self.widgets['labels']['primary'])
-        for i, w in enumerate(self.widgets['buttons']['primary']):
-            self.layouts['primary'].addWidget(w)
+        # Store containers for later access
+        self.dim_containers = dim_containers
+        
+        # Add all buttons and spinboxes to their vertical containers
+        for i in range(data.ndim):
+            w = self.widgets['buttons']['primary'][i]
+            self.dim_containers[i].layout().addWidget(w)
             w.clicked.connect(lambda checked, i=i : self.changedIndex(checked, 0, i))
-        
-        self.layouts['secondary'].addWidget(self.widgets['labels']['secondary'])
-        for i, w in enumerate(self.widgets['buttons']['secondary']):
-            self.layouts['secondary'].addWidget(w)
+            
+            w = self.widgets['buttons']['secondary'][i]
+            self.dim_containers[i].layout().addWidget(w)
             w.clicked.connect(lambda checked, i=i: self.changedIndex(checked, 1, i))
-
-        self.layouts['slice'].addWidget(self.widgets['labels']['slice'])
-        for i, w in enumerate(self.widgets['spins']['slice_indices']):
-            self.layouts['slice'].addWidget(w)
+            
+            w = self.widgets['spins']['slice_indices'][i]
+            self.dim_containers[i].layout().addWidget(w)
             w.valueChanged.connect(self.update)
         
         # Create a single compact control panel with all radio buttons
         controls_widget = QtWidgets.QWidget()
         controls_layout = QtWidgets.QVBoxLayout()
-        controls_layout.setSpacing(2)  # Reduce spacing between groups
-        controls_layout.setContentsMargins(5, 5, 5, 5)  # Reduce margins
         
         # Channel controls - horizontal layout to save space
         channel_group = QtWidgets.QGroupBox("Channel")
@@ -396,23 +427,25 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.layouts['topUp'].addWidget(self.widgets['labels']['pixelValue'])
         self.layouts['topUp'].addWidget(self.widgets['labels']['arrayInfo'])
 
-        # Make the left control panel much more compact with minimal spacing
-        self.layouts['botLeft'].setSpacing(1)  # Minimal spacing between rows
-        self.layouts['botLeft'].setContentsMargins(5, 2, 5, 2)  # Smaller top/bottom margins
-        
         self.layouts['botLeft'].addLayout(self.layouts['dims'])
-        self.layouts['botLeft'].addLayout(self.layouts['primary'])
-        self.layouts['botLeft'].addLayout(self.layouts['secondary'])
-        self.layouts['botLeft'].addLayout(self.layouts['slice'])
         
-        # Add stretch to prevent the control panel from expanding vertically
-        self.layouts['botLeft'].addStretch()
+        
+        # Create container widgets for proper alignment
+        left_container = QtWidgets.QWidget()
+        left_container.setLayout(self.layouts['botLeft'])
+        
+        right_container = QtWidgets.QWidget()
+        right_container.setLayout(self.layouts['botRight'])
+        
+        # Set both containers to expand vertically the same way
+        left_container.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        right_container.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         
         self.layouts['top'].addLayout(self.layouts['topUp'],1)
         self.layouts['top'].addLayout(self.layouts['topDown'],20)  # Give viewport much more space
         
-        self.layouts['bot'].addLayout(self.layouts['botLeft'],12)
-        self.layouts['bot'].addLayout(self.layouts['botRight'],1)
+        self.layouts['bot'].addWidget(left_container, 12)
+        self.layouts['bot'].addWidget(right_container, 1)
 
         # Give the viewport (top) much more weight so it expands when window grows
         self.layouts['main'].addLayout(self.layouts['top'], 10)  # Viewport gets most space
@@ -481,7 +514,61 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def _apply_ifft(self, dim):
         """Apply inverse FFT along specified dimension"""
         self.data = np.fft.ifftshift(np.fft.fft(np.fft.fftshift(self.data), axis=dim, norm='ortho'))
+    
+    def flipAxisClicked(self, event, dim):
+        """Handle click on flip axis icon"""
+        # Only respond if this dimension is currently selected
+        if dim not in self.selected_indices:
+            return
+        
+        # Toggle flip
+        self.axis_flipped[dim] = not self.axis_flipped[dim]
+        
+        self.update_flip_icons()
+        self.apply_axis_flips()
+        
+    def update_flip_icons(self):
+        for i, flip_label in enumerate(self.widgets['labels']['flip']):
+            if i in self.selected_indices:
+                if i == self.selected_indices[0]:
+                    if self.axis_flipped[i]:
+                        flip_label.setText('⬇️')
+                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeVerCursor))
+                        flip_label.setToolTip("Flip Y")
+                    else:
+                        flip_label.setText('⬆️')
+                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeVerCursor))
+                        flip_label.setToolTip("Flip Y")
+                elif len(self.selected_indices) > 1 and i == self.selected_indices[1]:
+                    if self.axis_flipped[i]:
+                        flip_label.setText('⬅️')
+                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
+                        flip_label.setToolTip("Flip X")
+                    else:
+                        flip_label.setText('➡️')
+                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.SizeHorCursor))
+                        flip_label.setToolTip("Flip X")
+                else:
+                    flip_label.setText('')  # Clear for dimensions not in primary/secondary
+                    flip_label.setToolTip('')
+            else:
+                flip_label.setText('')  # Clear for unselected dimensions
+                flip_label.setToolTip('')
+    
+    def apply_axis_flips(self):
+        if self.data.ndim == 1:  # No axis flipping for 1D data
+            return
             
+        view = self.img_view.getView()
+        
+        # Y axis
+        y_dim = self.selected_indices[0]
+        view.invertY(self.axis_flipped[y_dim])
+
+        # X axis
+        if len(self.selected_indices) > 1:
+            x_dim = self.selected_indices[1]
+            view.invertX(self.axis_flipped[x_dim])
     
     def getPixel(self, pos):
         img = self.img_view.image
@@ -561,6 +648,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             # Final processing and display
             image_data = np.nan_to_num(np.squeeze(image_data))
             self.img_view.setImage(image_data, autoLevels=al, levels=prev_levels)
+            
+            # Apply axis flips after setting the image
+            self.apply_axis_flips()
             
         except Exception as e:
             print(f'Image update failed: {e}')
@@ -775,10 +865,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def is_line_plot_mode(self):
         """Check if currently in line plot mode"""
         return self.tab_widget.currentIndex() == 1
-    
+
     def transposeView(self, event):
         old_primary = self.selected_indices[0]
-        self.changedIndex(event, 0, self.selected_indices[1], update=False)
+        old_secondary = self.selected_indices[1]
+
+        # Swap the flip states along with the dimensions (prevents the axes from appearing flipped after transpose)
+        self.axis_flipped[old_primary], self.axis_flipped[old_secondary] = self.axis_flipped[old_secondary], self.axis_flipped[old_primary]
+        
+        self.changedIndex(event, 0, old_secondary, update=False)
         self.changedIndex(event, 1, old_primary, update=True)
 
     def update(self):
@@ -870,11 +965,20 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.widgets['buttons']['primary'][self.selected_indices[0]].setChecked(True)
             if len(self.selected_indices) >= 2:
                 self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
+        
+        self.update_flip_icons()
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
         key = event.key()
         modifiers = event.modifiers()
+        
+        # Check for 'T' key to transpose view (swap X and Y dimensions)
+        if key == Qt.QtCore.Qt.Key.Key_T and modifiers == Qt.QtCore.Qt.KeyboardModifier.NoModifier:
+            if not self.is_line_plot_mode() and len(self.selected_indices) >= 2:
+                self.transposeView(event)
+                event.accept()
+                return
         
         # Check CTRL+number for colormap changes
         if modifiers == Qt.QtCore.Qt.KeyboardModifier.ControlModifier:
