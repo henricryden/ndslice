@@ -33,8 +33,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     RADIO_BUTTON_STYLE = "QRadioButton { font-size: 11px; }"
     GROUPBOX_BASE_STYLE = "QGroupBox { font-size: 11px; font-weight: bold; padding-top: 8px; margin-top: 3px; } QGroupBox::title { subcontrol-origin: margin; left: 5px; }"
 
-    def __init__(self, data, *args, **kwargs):
-        super(NDSliceWindow, self).__init__(*args, **kwargs)
+    def __init__(self, data, complex_dim=None):
+        super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
@@ -44,6 +44,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.scale = None
         
         self.axis_flipped = [False] * data.ndim  # Track flip state so that one can toggle dims and come back to the same flip state
+        
+        # If data is real-valued and has size-2 dimensions, ndslice can combine them as complex (ISMRMD uses this for real/imag parts)
+        if np.iscomplexobj(data):
+            self.can_combine_as_complex = [False] * data.ndim
+        else:
+            self.can_combine_as_complex = [data.shape[i] == 2 for i in range(data.ndim)]
+        self.combined_as_complex = [False] * data.ndim
+        
+        # Store complex_dim for later use (after widgets are created)
+        self._initial_complex_dim = complex_dim
         
         for dim in range(0,data.ndim):
             if self.singleton[dim] is False and len(self.selected_indices) < 2:
@@ -89,6 +99,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             'labels': {
                 'dims': [QtWidgets.QLabel('[' + str(data.shape[i]) + ']', alignment=Qt.QtCore.Qt.AlignCenter) for i in range(data.ndim)],
                 'flip': [QtWidgets.QLabel('', alignment=Qt.QtCore.Qt.AlignCenter) for i in range(data.ndim)],
+                'complex': [QtWidgets.QLabel('', alignment=Qt.QtCore.Qt.AlignCenter) for i in range(data.ndim)],
                 'primary': QtWidgets.QLabel('Y'),
                 'secondary': QtWidgets.QLabel('X'),
                 'slice': QtWidgets.QLabel('Slice'),
@@ -155,6 +166,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             flip_label.setStyleSheet(self.FLIP_ICON_STYLE)
             flip_label.setAlignment(Qt.QtCore.Qt.AlignLeft | Qt.QtCore.Qt.AlignVCenter)
         
+        # Set up complex indicator labels with click handlers
+        for i, complex_label in enumerate(self.widgets['labels']['complex']):
+            complex_label.mousePressEvent = lambda event, i=i: self.complexOrRealClicked(event, i)
+            complex_label.setStyleSheet(self.FLIP_ICON_STYLE)
+            complex_label.setAlignment(Qt.QtCore.Qt.AlignRight | Qt.QtCore.Qt.AlignVCenter)
+        
         # Apply compact styling to dimension control widgets
         for label in self.widgets['labels']['dims']:
             label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
@@ -197,6 +214,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             # Add dimension label (centered, takes remaining space)
             self.widgets['labels']['dims'][i].setAlignment(Qt.QtCore.Qt.AlignCenter)
             label_layout.addWidget(self.widgets['labels']['dims'][i], 1)
+            # Add complex indicator (ℝ/ℂ)
+            label_layout.addWidget(self.widgets['labels']['complex'][i])
             
             label_row.setLayout(label_layout)
             container_layout.addWidget(label_row)
@@ -445,6 +464,19 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         tmp.setLayout(self.layouts['main'])
         self.setCentralWidget(tmp)
         
+        # Initialize complex indicators for size-2 real dimensions
+        self.update_complex_indicators()
+        
+        if complex_dim is not None: # user requested combining as complex
+            if complex_dim < 0 or complex_dim >= data.ndim:
+                print(f"Warning: complex_dim={complex_dim} is out of range for {data.ndim}D array. Ignoring.")
+            elif np.iscomplexobj(data):
+                print(f"Warning: Data is already complex. Ignoring complex_dim={complex_dim}.")
+            elif data.shape[complex_dim] != 2:
+                print(f"Warning: Dimension {complex_dim} has shape {data.shape[complex_dim]}, not 2. Cannot combine as complex. Ignoring.")
+            else:
+                self.combineAsComplex(complex_dim) # valid
+        
         # Initialize dimension controls based on data dimensions
         if len(self.selected_indices) >= 1:
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
@@ -571,6 +603,119 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 x_dim = self.selected_indices[1]
                 view.invertX(self.axis_flipped[x_dim])
 
+    def update_complex_indicators(self):
+        """Initialize or update ℝ/ℂ indicators for dimensions that can be combined as complex"""
+        for i in range(self.data.ndim):
+            indicator = self.widgets['labels']['complex'][i]
+            
+            if self.combined_as_complex[i]:
+                indicator.setText('ℂ')
+                indicator.setStyleSheet(self.FLIP_ICON_STYLE + " QLabel {font-weight: bold; }")
+                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.PointingHandCursor))
+                indicator.setToolTip(f'Split to real')
+            elif self.can_combine_as_complex[i]:
+                indicator.setText('ℝ')
+                indicator.setStyleSheet(self.FLIP_ICON_STYLE + " QLabel {font-weight: bold; }")
+                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.PointingHandCursor))
+                indicator.setToolTip(f'Combine as complex')
+            else:
+                # No indicator, already-complex data or non-size-2 dimensions
+                indicator.setText('')
+                indicator.setToolTip('')
+                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.ArrowCursor))
+    
+    def complexOrRealClicked(self, event, dim):
+        if self.can_combine_as_complex[dim] and not self.combined_as_complex[dim]:
+            # ℝ clicked - combine to complex
+            self.combineAsComplex(dim)
+        elif self.combined_as_complex[dim]:
+            # ℂ clicked - split back to real
+            self.splitToReal(dim)
+    
+    def combineAsComplex(self, dim):
+        """Combine a size-2 real dimension into complex (real+imag), keeping singleton dimension (makes indexing easier)"""
+        if not self.can_combine_as_complex[dim] or self.combined_as_complex[dim]:
+            return
+        
+        # Build slices to extract real and imaginary parts
+        real_slice = [slice(None)] * self.data.ndim
+        imag_slice = [slice(None)] * self.data.ndim
+        real_slice[dim] = 0
+        imag_slice[dim] = 1
+        
+        self.data = np.expand_dims(self.data[tuple(real_slice)] + 1j * self.data[tuple(imag_slice)], axis=dim)
+
+        # Update state
+        self.combined_as_complex[dim] = True
+        self.can_combine_as_complex[dim] = False
+        self.singleton[dim] = True  # Now it's a singleton dimension
+        
+        # Once data is complex, no other dimension can be combined (all other size-2 dims become invalid)
+        for i in range(self.data.ndim):
+            if i != dim:
+                self.can_combine_as_complex[i] = False
+        
+        # If the converted dimension was in selected_indices or line_plot_dimension, we need to find a new valid selection
+        if dim in self.selected_indices:
+            # Find a new non-singleton dimension to replace it
+            for new_dim in range(self.data.ndim):
+                if not self.singleton[new_dim] and new_dim not in self.selected_indices:
+                    idx = self.selected_indices.index(dim)
+                    self.selected_indices[idx] = new_dim
+                    break
+        
+        # Same problem can happen with line plot.
+        if self.line_plot_dimension == dim:
+            for new_dim in range(self.data.ndim):
+                if not self.singleton[new_dim]:
+                    self.line_plot_dimension = new_dim
+                    break
+        
+        # Enable complex channel buttons now that data is complex
+        for button in self.widgets['buttons']['channel'].values():
+            button.setEnabled(True)
+        
+        if not self.widgets['buttons']['channel']['abs'].isChecked():
+            self.widgets['buttons']['channel']['abs'].setChecked(True)
+        
+        # Update UI
+        self.update_complex_indicators()
+        self.update_dimension_controls()
+        self.update()
+    
+    def splitToReal(self, dim):
+        """Split a complex dimension back to real (real+imag as separate slices)"""
+        if not self.combined_as_complex[dim]:
+            return
+        
+        # Restore data to real with size-2 dimension
+        self.data = np.stack([np.real(self.data).squeeze(dim), 
+                              np.imag(self.data).squeeze(dim)], axis=dim)
+        
+        # Update state
+        self.combined_as_complex[dim] = False
+        self.can_combine_as_complex[dim] = True
+        self.singleton[dim] = False
+        
+        # Data is now real - re-enable combining for all size-2 dimensions
+        for i in range(self.data.ndim):
+            if self.data.shape[i] == 2:
+                self.can_combine_as_complex[i] = True
+        
+        # Update max value for the spinbox for this dimension
+        self.widgets['spins']['slice_indices'][dim].setMaximum(self.data.shape[dim] - 1)
+        
+        # Disable complex channel buttons (data is now real)
+        for button in self.widgets['buttons']['channel'].values():
+            button.setEnabled(False)
+        
+        # Switch to 'real' channel
+        self.widgets['buttons']['channel']['real'].setChecked(True)
+        
+        # Update UI
+        self.update_complex_indicators()
+        self.update_dimension_controls()
+        self.update()
     
     def getPixel(self, pos):
         img = self.img_view.image
@@ -1027,24 +1172,24 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Failed to set colormap {colormap_name}: {e}")
         
-def _run_window(data, title):
+def _run_window(data, title, complex_dim=None):
     """Opens a window in a separate process which is blocked on exec()"""
     app = QtWidgets.QApplication.instance()
     if app is None:
         app = QtWidgets.QApplication([])
-    win = NDSliceWindow(data)
+    win = NDSliceWindow(data, complex_dim=complex_dim)
     win.setWindowTitle(title)
     win.show()
     app.exec()
 
-def ndslice(data, title='', block=False):
+def ndslice(data, title='', block=False, complex_dim=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
         raise ValueError("data must have at least 1 dimension")
     
     if block:
-        _run_window(data, title)
+        _run_window(data, title, complex_dim)
     else:
-        process = mp.Process(target=_run_window, args=(data, title)).start()
+        process = mp.Process(target=_run_window, args=(data, title, complex_dim)).start()
     
