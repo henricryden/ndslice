@@ -20,6 +20,7 @@ class DatasetSelector:
         self.filepath = filepath
         self.compatible_datasets = compatible_datasets or []
         self.selected_dataset = None
+        self.interpret_as_complex = None  # Dimension to interpret as complex (real/imag split)
     
     def requires_gui(self):
         """Check if GUI selector is needed (more than one compatible dataset)."""
@@ -58,7 +59,10 @@ class DatasetSelector:
             result = self.get_single_data()
             if result:
                 name, data = result
-                ndslice(data=data, title=f"{self.filepath.name} - {name}", block=block)
+                ndslice(data=data,
+                        title=f"{self.filepath.name} - {name}",
+                        block=block,
+                        complex_dim=self.interpret_as_complex)
                 return True
             else:
                 return False
@@ -73,8 +77,11 @@ class DatasetSelector:
             
             if selected_path := self.show():
                 data = self.load_data(selected_path)
-                ndslice(data=data, title=f"{self.filepath.name} - {selected_path}", block=True) # Block since separate process
-        
+                ndslice(data=data,
+                        title=f"{self.filepath.name} - {selected_path}",
+                        block=True, # Block since separate process
+                        complex_dim=self.interpret_as_complex)
+
         mp.Process(target=_run_and_view).start()
         return True
     
@@ -174,10 +181,33 @@ class H5DatasetSelector(DatasetSelector):
         self.compatible_datasets = self._find_compatible_datasets()
         self.compatible_paths = {path for path, _ in self.compatible_datasets}
         super().__init__(filepath, self.compatible_datasets)
+
+        self._detect_complex_interpretation()
     
     def __del__(self):
         if hasattr(self, 'h5_file') and self.h5_file:
             self.h5_file.close()
+
+    def _detect_complex_interpretation(self):
+        """
+        If there's a single compatible dataset with 'complex' in name and a size-2 dimension,
+        auto-set interpret_as_complex to that dimension.
+        This is how ISMRMD stores complex data.
+        """
+        if len(self.compatible_datasets) != 1:
+            return
+        
+        dataset_path, shape = self.compatible_datasets[0]
+        
+        if 'complex' not in dataset_path.lower():
+            return
+        
+        # Find first dimension with size 2
+        for dim_idx, size in enumerate(shape):
+            if size == 2:
+                self.interpret_as_complex = dim_idx
+                print(f"Auto-detected complex interpretation: dimension {dim_idx} of '{dataset_path}' (shape {shape})")
+                break
 
     def _is_compound_dataset(self, dataset):
         """Check if dataset is compound type with array fields."""
