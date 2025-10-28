@@ -2,12 +2,12 @@
 """
 Command-line interface for ndslice.
 """
-import sys
 import argparse
 import numpy as np
 from pathlib import Path
 from .ndslice import ndslice
 from .selectors import H5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
+from .file_interpreters import load_file
 
 
 def main():
@@ -19,12 +19,13 @@ def main():
 Examples:
   ndslice data.npy                      # View single file
   ndslice data.h5 data2.npy data3.npz   # View multiple files
+  ndslice scan.REC                      # View Philips REC/XML pair
   
 For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatically appear.
         """
     )
     parser.add_argument('files', type=str, nargs='+', 
-                        help='Path(s) to data file(s) (.h5, .hdf5, .npy, .npz, .mat)')
+                        help='Path(s) to data file(s) (.h5, .hdf5, .npy, .npz, .mat, .REC)')
     
     args = parser.parse_args()
     
@@ -38,13 +39,13 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
         try:
             suffix = filepath.suffix.lower()
             
-            # Simple NPY file - load directly
-            if suffix == '.npy':
-                data = np.load(filepath)
-                ndslice(data=data, title=filepath.name, block=False)
+            # Single-dataset formats is handled by file_interpreters.load_file
+            if suffix in ['.npy', '.rec']:
+                data = load_file(filepath)
+                ndslice(data=data, title=filepath.stem, block=False)
                 continue
             
-            # Create appropriate selector based on file type
+            # Multi-dataset formats - use selectors
             selector = None
             if suffix in ['.h5', '.hdf5']:
                 selector = H5DatasetSelector(filepath)
@@ -53,7 +54,7 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             elif suffix == '.mat':
                 selector = MatDatasetSelector(filepath)
             else:
-                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat")
+                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat, .REC")
                 continue
             
             # Select and view dataset (shows GUI if multiple datasets)
