@@ -250,6 +250,27 @@ class DicomLoader:
         return remove_trailing_singletons(dcm.pixel_array)
 
 
+class NiftiLoader:
+    def __init__(self, file_path):
+        self.file_path = Path(file_path)
+        
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"NIfTI file not found: {self.file_path}")
+
+    def load(self):
+        try:
+            import nibabel as nib
+        except ImportError:
+            raise ImportError(
+                "nibabel is required to read NIfTI files.\n"
+                "Install it with: pip install nibabel"
+            )
+        
+        data = nib.load(self.file_path).get_fdata()
+        return remove_trailing_singletons(data)
+
+
+
 
 
 def load_file(filepath):
@@ -270,7 +291,7 @@ def load_file(filepath):
         
     """
     filepath = Path(filepath)
-    suffix = filepath.suffix.lower()
+    suffix = ''.join(Path(filepath).suffixes).lower()
     
     if suffix == '.npy':
         return np.load(filepath)
@@ -285,6 +306,9 @@ def load_file(filepath):
     
     elif suffix == '.dcm':
         loader = DicomLoader(filepath)
+        return loader.load()
+    elif suffix in ['.nii', '.nii.gz']:
+        loader = NiftiLoader(filepath)
         return loader.load()
     
     else:
