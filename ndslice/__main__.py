@@ -20,12 +20,14 @@ Examples:
   ndslice data.npy                      # View single file
   ndslice data.h5 data2.npy data3.npz   # View multiple files
   ndslice scan.REC                      # View Philips REC/XML pair
+  ndslice ref.cfl                       # View BART CFL/HDR pair
+  ndslice scan.dcm                      # View DICOM file
   
 For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatically appear.
         """
     )
     parser.add_argument('files', type=str, nargs='+', 
-                        help='Path(s) to data file(s) (.h5, .hdf5, .npy, .npz, .mat, .REC)')
+                        help='Path(s) to data file(s) (.h5, .hdf5, .npy, .npz, .mat, .REC, .cfl, .dcm)')
     
     args = parser.parse_args()
     
@@ -40,7 +42,7 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             suffix = filepath.suffix.lower()
             
             # Single-dataset formats is handled by file_interpreters.load_file
-            if suffix in ['.npy', '.rec']:
+            if suffix in ['.npy', '.rec', '.cfl', '.dcm']:
                 data = load_file(filepath)
                 ndslice(data=data, title=filepath.stem, block=False)
                 continue
@@ -54,7 +56,7 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             elif suffix == '.mat':
                 selector = MatDatasetSelector(filepath)
             else:
-                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat, .REC")
+                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat, .REC, .cfl, .dcm")
                 continue
             
             # Select and view dataset (shows GUI if multiple datasets)
