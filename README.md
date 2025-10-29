@@ -84,6 +84,7 @@ ndslice has CLI support and can conveniently display:
 - HDF5 `.h5` / `.hdf5`, (requires h5py)
 - [BART](https://mrirecon.github.io/bart/) `.cfl` + `.hdr`
 - Philips `.REC` + `.xml`
+- NifTI `.nii` / `.nii.gz`
 - Dicom pixel array `.dcm` (requires pydicom)
 
 HDF5 files can be compound complex dtype, or real/imag fields.
