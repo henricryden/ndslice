@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ndslice"
-version = "0.2.0"
+version = "0.3.0"
 description = "Interactive N-dimensional numpy array viewer with FFT support"
 readme = "README.md"
 authors = [
@@ -43,8 +43,15 @@ dev = [
 hdf5 = [
     "h5py>=3.0.0",
 ]
+matlab = [
+    "scipy>=1.7.0",
+]
 all = [
     "h5py>=3.0.0",
+    "scipy>=1.7.0",
+]
+dicom = [
+    "pydicom>=2.4.0",
 ]
 
 [project.urls]

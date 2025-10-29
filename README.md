@@ -16,7 +16,6 @@ x = np.linspace(-5, 5, 100)
 y = np.linspace(-5, 5, 100)
 z = np.linspace(-5, 5, 50)
 X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-
 mag = np.exp(-(X**2 + Y**2 + Z**2) / 10)
 pha = np.pi/4 * (X + Y + Z)
 complex_data = mag * np.exp(1j * pha)
@@ -25,22 +24,6 @@ ndslice(complex_data, title='3D Complex Gaussian')
 ```
 
 ![Showcase](docs/images/showcase.gif)
-
-
-### Command Line
-```bash
-ndslice data.npy # Numpy file
-ndslice --help   # Show all options
-```
-
-**HDF5 support** (requires `pip install h5py`):
-```bash
-ndslice data.h5 
-```
-
-The CLI automatically detects and loads the largest multidimensional dataset in HDF5 files
-Handles both real and complex data (including compound dtypes with real/imag fields).
-
 
 ## Features
 
@@ -66,6 +49,12 @@ Change colormap:
 - `Ctrl+3` Plasma
 - `Ctrl+4` Rainbow
 
+
+**Axis flipping**
+Click arrow icons (⬇️/⬆️ and ⬅️/➡️) next to dimension labels to flip axes.
+Default orientation is image-style (origin lower-left).
+Flip the primary axis for matrix-style (origin upper-left).
+
 **Non-blocking windows**
 
 By default, windows open in separate processes, allowing multiple simultaneous views:
@@ -79,6 +68,32 @@ Use `block=True` to wait for the window to close before continuing:
 ndslice(data1, block=True)  # Script pauses here
 ndslice(data2)  # Shown after first closes
 ```
+
+
+### Command Line
+```bash
+ndslice data.npy # Numpy file
+ndslice --help   # Show all options
+```
+
+**File support**
+ndslice has CLI support and can conveniently display:
+
+- Numpy `.npy` / `.npz`
+- MATLAB `.mat` (requires scipy)
+- HDF5 `.h5` / `.hdf5`, (requires h5py)
+- [BART](https://mrirecon.github.io/bart/) `.cfl` + `.hdr`
+- Philips `.REC` + `.xml`
+- Dicom pixel array `.dcm` (requires pydicom)
+
+HDF5 files can be compound complex dtype, or real/imag fields.
+
+If there are multiple datasets in the file, a selection GUI appears which highlights arrays supported by ndslice (essentially numeric).
+Double click to open.
+
+![Selector](docs/images/selector.png)
+
+
 ## Installation
 
 ### From PyPI
