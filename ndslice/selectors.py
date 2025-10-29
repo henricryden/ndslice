@@ -222,9 +222,8 @@ class H5DatasetSelector(DatasetSelector):
             base_dtype, shape = field_dtype.subdtype
             is_array = isinstance(shape, tuple) and len(shape) >= 1 and np.issubdtype(base_dtype, np.number)
             return (shape, base_dtype, is_array)
-        else:
-            # Scalar field
-            return ((1,), field_dtype, False)
+        # Scalar field
+        return ((1,), field_dtype, False)
 
     def _find_compatible_datasets(self):
         """Find all compatible datasets and compound array fields."""
@@ -233,17 +232,23 @@ class H5DatasetSelector(DatasetSelector):
 
         def visit_func(name, obj):
             if isinstance(obj, h5.Dataset) and hasattr(obj, 'ndim') and obj.ndim >= 1:
-                # Add compatible compound array fields
                 if self._is_compound_dataset(obj):
-                    for field_name in obj.dtype.names:
-                        shape, dtype, is_array = self._get_compound_field_info(obj, field_name)
-                        if is_array:
-                            field_path = f"{name}/{field_name}"
-                            compatible.append((field_path, shape))
-                # Add numeric datasets (but not compound datasets themselves)
+                    # Only add dataset itself if it has both real and imag fields
+                    names = obj.dtype.names or ()
+                    real_name = next((n for n in ['real', 'realdata', 'r'] if n in names), None)
+                    imag_name = next((n for n in ['imag', 'imagdata', 'i'] if n in names), None)
+                    if real_name and imag_name:
+                        compatible.append((name, obj.shape))
+                    else:
+                        # Still allow array fields (e.g. for ISMRMRD style)
+                        for field_name in names:
+                            shape, dtype, is_array = self._get_compound_field_info(obj, field_name)
+                            if is_array:
+                                field_path = f"{name}/{field_name}"
+                                compatible.append((field_path, shape))
                 elif np.issubdtype(obj.dtype, np.number):
                     compatible.append((name, obj.shape))
-        
+
         self.h5_file.visititems(visit_func)
         return compatible
     
@@ -353,7 +358,6 @@ class NpzDatasetSelector(DatasetSelector):
     
     def load_data(self, name):
         """Load data for a given array name."""
-        import numpy as np
         return np.asarray(self.npz_file[name]) # npz can be read-only memmap
     
     def _build_tree(self):
