@@ -78,14 +78,15 @@ ndslice --help   # Show all options
 
 **File support**
 ndslice has CLI support and can conveniently display:
-
-- Numpy `.npy` / `.npz`
-- MATLAB `.mat` (requires scipy)
-- HDF5 `.h5` / `.hdf5`, (requires h5py)
-- [BART](https://mrirecon.github.io/bart/) `.cfl` + `.hdr`
-- Philips `.REC` + `.xml`
-- NifTI `.nii` / `.nii.gz`
-- Dicom pixel array `.dcm` (requires pydicom)
+| Format | File suffix | Requirement |
+|---|---:|---|
+| NumPy | `.npy`, `.npz` | NumPy |
+| MATLAB | `.mat` | scipy |
+| HDF5 | `.h5`, `.hdf5` | h5py |
+| [BART](https://mrirecon.github.io/bart/) | `.cfl` + `.hdr` | — |
+| Philips REC | `.REC` + `.xml` | — |
+| [NIfTI](https://nifti.nimh.nih.gov/) | `.nii`, `.nii.gz` | nibabel |
+| DICOM (pixel array) | `.dcm` | pydicom |
 
 HDF5 files can be compound complex dtype, or real/imag fields.
 
