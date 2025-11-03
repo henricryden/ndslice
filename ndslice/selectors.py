@@ -5,6 +5,38 @@ Handles mat, h5, and npz files.
 import numpy as np
 
 
+def _view_dataset_in_subprocess(filepath, dataset_path, interpret_as_complex):
+    from pyqtgraph.Qt import QtWidgets
+    from .ndslice import ndslice
+    import sys
+    
+    # Import appropriate selector based on file extension
+    if filepath.suffix.lower() == '.h5':
+        from .selectors import H5DatasetSelector
+        selector_class = H5DatasetSelector
+    elif filepath.suffix.lower() == '.npz':
+        from .selectors import NpzDatasetSelector
+        selector_class = NpzDatasetSelector
+    elif filepath.suffix.lower() == '.mat':
+        from .selectors import MatDatasetSelector
+        selector_class = MatDatasetSelector
+    else:
+        return
+
+    # Create selector and load data locally
+    selector = selector_class(filepath)
+    data = selector.load_data(dataset_path)
+    
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+    
+    ndslice(data=data,
+            title=f"{filepath.name} - {dataset_path}",
+            block=True,
+            complex_dim=interpret_as_complex)
+
+
 class DatasetSelector:
     """Base class for GUI dialog to select datasets from multi-dataset files."""
     
@@ -67,23 +99,27 @@ class DatasetSelector:
             else:
                 return False
         
-        # Multiple datasets - GUI mode
-        import multiprocessing as mp
+        # Multiple datasets
+        # Ensure QApplication exists
+        import sys
+        app = self.QtWidgets.QApplication.instance()
+        if app is None:
+            app = self.QtWidgets.QApplication(sys.argv)
         
-        def _run_and_view():
-            # Create QApplication in this separate process
-            from pyqtgraph.Qt import QtWidgets
-            app = QtWidgets.QApplication([])
-            
-            if selected_path := self.show():
+        if selected_path := self.show():
+            if block:
                 data = self.load_data(selected_path)
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {selected_path}",
-                        block=True, # Block since separate process
+                        block=True,
                         complex_dim=self.interpret_as_complex)
-
-        mp.Process(target=_run_and_view).start()
-        return True
+            else:
+                import multiprocessing as mp
+                mp.Process(target=_view_dataset_in_subprocess,
+                          args=(self.filepath, selected_path, self.interpret_as_complex)).start()
+            return True
+        
+        return False
     
     def _create_dialog(self):
         """Create and configure the dialog widget."""
