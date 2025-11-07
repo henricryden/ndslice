@@ -424,12 +424,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.tab_widget.addTab(self.image_tab, "Image View")
         self.tab_widget.addTab(self.plot_tab, "Line Plot")
         
+        # Track plot style (line vs bar)
+        self.plot_style = 'line'  # 'line' or 'bar'
+        
         if data.ndim == 1:
             self.tab_widget.setTabEnabled(0, False)  # Disable Image View tab
             self.tab_widget.setCurrentIndex(1)  # Set line plot as default
         
         # Connect tab change handler
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
+        
+        self.tab_widget.tabBar().installEventFilter(self)
         
         # Add tab widget to the main layout
         self.layouts['topDown'].addWidget(self.tab_widget)
@@ -917,10 +922,19 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             if line_data.ndim == 1:
                 # Remember for hover queries
                 self.current_line_data = line_data
-                # Thicker anti-aliased line
-                pen = pg.mkPen(color=(50, 100, 200), width=2)
-                # Keep a reference to the curve so we could later update data without clearing
-                self.line_curve = self.plot_widget.plot(line_data, pen=pen, name='')
+                
+                if self.plot_style == 'bar':
+                    x = np.arange(len(line_data))
+                    brush = pg.mkBrush(50, 100, 200, 180)
+                    pen = pg.mkPen(50, 100, 200)
+                    self.line_curve = pg.BarGraphItem(x=x, height=line_data, width=0.8, brush=brush, pen=pen)
+                    self.plot_widget.addItem(self.line_curve)
+                    self.tab_widget.setTabText(1, "Bar Plot")
+                else:
+                    pen = pg.mkPen(color=(50, 100, 200), width=2)
+                    self.line_curve = self.plot_widget.plot(line_data, pen=pen, name='')
+                    self.tab_widget.setTabText(1, "Line Plot")
+                
                 # Capture base x-span after first valid plot for scaling reference
                 if self.line_base_range is None:
                     x_min = 0
@@ -942,6 +956,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         """
         if self.line_curve is None or self.line_base_range is None:
             return
+        
+        if self.plot_style == 'bar':
+            return
+
         try:
             (x_range, _) = ranges  # ranges is ((xMin,xMax),(yMin,yMax))
             x_span = max(1e-9, x_range[1] - x_range[0])
@@ -1171,6 +1189,24 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             print(f"Failed to set colormap {colormap_name}: {e}")
+    
+    def eventFilter(self, obj, event):
+        if obj == self.tab_widget.tabBar():
+            if event.type() == Qt.QtCore.QEvent.Type.MouseButtonDblClick:
+                # which tab was double-clicked
+                tab_bar = self.tab_widget.tabBar()
+                clicked_index = tab_bar.tabAt(event.pos())
+                
+                # Check if line/bar tab (index 1)
+                if clicked_index == 1:
+                    if self.plot_style == 'line':
+                        self.plot_style = 'bar'
+                    else:
+                        self.plot_style = 'line'
+                    self.update_line_plot()
+                    event.accept()
+                    return True 
+        return super().eventFilter(obj, event)
         
 def _run_window(data, title, complex_dim=None):
     """Opens a window in a separate process which is blocked on exec()"""
