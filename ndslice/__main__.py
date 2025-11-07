@@ -23,6 +23,7 @@ Examples:
   ndslice ref.cfl                       # View BART CFL/HDR pair
   ndslice scan.dcm                      # View DICOM file
   ndslice scan.nii                      # View NIfTI file
+  ndslice data.txt                      # View text file with numeric data
   
 For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatically appear.
         """
@@ -42,9 +43,9 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
         try:
             suffix = ''.join(filepath.suffixes).lower()
             # Single-dataset formats is handled by file_interpreters.load_file
-            if suffix in ['.npy', '.rec', '.cfl', '.dcm', '.nii', '.nii.gz']:
+            if suffix in ['.npy', '.rec', '.cfl', '.dcm', '.nii', '.nii.gz', '.txt']:
                 data = load_file(filepath)
-                ndslice(data=data, title=filepath.stem, block=False)
+                ndslice(data=data, title=filepath.name, block=False)
                 continue
             
             # Multi-dataset formats - use selectors
@@ -56,7 +57,7 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             elif suffix == '.mat':
                 selector = MatDatasetSelector(filepath)
             else:
-                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat, .REC, .cfl, .dcm, .nii")  # Added .nii
+                print(f"Unsupported file type: {suffix}. Supported types: .h5, .hdf5, .npy, .npz, .mat, .REC, .cfl, .dcm, .nii, .txt")
                 continue
             
             # Select and view dataset (shows GUI if multiple datasets)

@@ -270,6 +270,57 @@ class NiftiLoader:
         return remove_trailing_singletons(data)
 
 
+class TextLoader:
+    def __init__(self, file_path):
+        self.file_path = Path(file_path)
+        
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"Text file not found: {self.file_path}")
+    
+    def load(self):
+        """
+        Load simple text files with numeric data.
+        - Skips non-numeric header lines
+        - Supports comma, tab, semicolon, and whitespace delimiters
+        - Handles up to 2D data
+        """
+        numeric_lines = []
+        
+        with open(self.file_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Replace common delimiters with spaces for uniform parsing
+                for delimiter in [',', '\t', ';', '|']:
+                    line = line.replace(delimiter, ' ')
+                
+                # Try to parse as numeric values
+                try:
+                    values = [float(x) for x in line.split()]
+                    if values:  # Only add non-empty lines
+                        numeric_lines.append(values)
+                except ValueError:
+                    # Skip non-numeric lines (headers/comments)
+                    continue
+        
+        if not numeric_lines:
+            raise ValueError(f"No numeric data found in {self.file_path}")
+        
+        # Check if all rows have the same length (2D) or if it's 1D
+        row_lengths = [len(row) for row in numeric_lines]
+        
+        if len(set(row_lengths)) == 1:
+            # All rows have same length - create 2D array
+            data = np.array(numeric_lines, dtype=np.float32)
+        else:
+            # Different row lengths - flatten to 1D
+            data = np.array([val for row in numeric_lines for val in row], dtype=np.float32)
+        
+        return remove_trailing_singletons(data)
+
+
 
 
 
@@ -282,6 +333,8 @@ def load_file(filepath):
     - .REC: Philips XLM+REC (requires xml file)
     - .cfl: BART format (requires hdr file)
     - .dcm: DICOM format (requires pydicom)
+    - .nii/.nii.gz: NIfTI format (requires nibabel)
+    - .txt: Simple text files with numeric data
     
     Args:
         filepath: Path to data file
@@ -309,6 +362,10 @@ def load_file(filepath):
         return loader.load()
     elif suffix in ['.nii', '.nii.gz']:
         loader = NiftiLoader(filepath)
+        return loader.load()
+    
+    elif suffix == '.txt':
+        loader = TextLoader(filepath)
         return loader.load()
     
     else:
