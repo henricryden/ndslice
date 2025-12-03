@@ -1,3 +1,7 @@
+[![Python versions](https://img.shields.io/pypi/pyversions/ndslice.svg)](https://pypi.org/project/ndslice/)
+[![PyPI version](https://img.shields.io/pypi/v/ndslice.svg)](https://pypi.org/project/ndslice/)
+[![License](https://img.shields.io/github/license/henricryden/ndslice.svg)](https://github.com/henricryden/ndslice/blob/main/LICENSE)
+[![Downloads](https://static.pepy.tech/personalized-badge/ndslice?period=total&units=international_system&left_color=black&right_color=green&left_text=downloads)](https://pepy.tech/projects/ndslice)
 # ndslice
 
 **Quick interactive visualization for N-dimensional NumPy arrays**
