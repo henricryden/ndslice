@@ -5,36 +5,40 @@ Handles mat, h5, and npz files.
 import numpy as np
 
 
-def _view_dataset_in_subprocess(filepath, dataset_path, interpret_as_complex):
+def _show_selector(filepath, selector_class_name, interpret_as_complex):
     from pyqtgraph.Qt import QtWidgets
     from .ndslice import ndslice
     import sys
-    
-    # Import appropriate selector based on file extension
-    if filepath.suffix.lower() == '.h5':
+
+    # Import appropriate selector class (not checking filename twice with this approach)
+    if selector_class_name == 'H5DatasetSelector':
         from .selectors import H5DatasetSelector
         selector_class = H5DatasetSelector
-    elif filepath.suffix.lower() == '.npz':
+    elif selector_class_name == 'NpzDatasetSelector':
         from .selectors import NpzDatasetSelector
         selector_class = NpzDatasetSelector
-    elif filepath.suffix.lower() == '.mat':
+    elif selector_class_name == 'MatDatasetSelector':
         from .selectors import MatDatasetSelector
         selector_class = MatDatasetSelector
     else:
         return
-
-    # Create selector and load data locally
-    selector = selector_class(filepath)
-    data = selector.load_data(dataset_path)
     
+    # Create QApplication
     app = QtWidgets.QApplication.instance()
     if app is None:
         app = QtWidgets.QApplication(sys.argv)
     
-    ndslice(data=data,
-            title=f"{filepath.name} - {dataset_path}",
-            block=True,
-            complex_dim=interpret_as_complex)
+    # Create selector
+    selector = selector_class(filepath)
+    selector.interpret_as_complex = interpret_as_complex
+    
+    # Show dialog
+    if selected_path := selector.show():
+        data = selector.load_data(selected_path)
+        ndslice(data=data,
+                title=f"{filepath.name} - {selected_path}",
+                block=True,
+                complex_dim=interpret_as_complex)
 
 
 class DatasetSelector:
@@ -101,25 +105,25 @@ class DatasetSelector:
         
         # Multiple datasets
         # Ensure QApplication exists
-        import sys
-        app = self.QtWidgets.QApplication.instance()
-        if app is None:
-            app = self.QtWidgets.QApplication(sys.argv)
-        
-        if selected_path := self.show():
-            if block:
+        if block:
+            import sys
+            app = self.QtWidgets.QApplication.instance()
+            if app is None:
+                app = self.QtWidgets.QApplication(sys.argv)
+            
+            if selected_path := self.show():
                 data = self.load_data(selected_path)
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {selected_path}",
                         block=True,
                         complex_dim=self.interpret_as_complex)
-            else:
-                import multiprocessing as mp
-                mp.Process(target=_view_dataset_in_subprocess,
-                          args=(self.filepath, selected_path, self.interpret_as_complex)).start()
+                return True
+            return False
+        else:
+            import multiprocessing as mp
+            mp.Process(target=_show_selector,
+                      args=(self.filepath, self.__class__.__name__, self.interpret_as_complex)).start()
             return True
-        
-        return False
     
     def _create_dialog(self):
         """Create and configure the dialog widget."""
@@ -175,17 +179,41 @@ class DatasetSelector:
         item.setExpanded(True)
         return item
     
-    def _add_item(self, parent, name, shape, dtype, path, compatible=True):
-        # Format shape
+    def _get_shape_display(self, shape, data=None):
+        """Get display string for shape, or scalar value if applicable."""
+        # Show scalar value if multiple datasets and data is scalar
+        if data is not None and self.requires_gui() and isinstance(shape, tuple) and np.prod(shape) == 1:
+            try:
+                arr = np.asarray(data)
+                if arr.size == 1:
+                    value = arr.flat[0]
+                    # Format string values (truncate to 100 chars)
+                    if isinstance(value, bytes):
+                        value_str = value.decode('utf-8', errors='replace')
+                    elif isinstance(value, str):
+                        value_str = value
+                    else:
+                        value_str = str(value)
+                    
+                    if len(value_str) > 100:
+                        value_str = value_str[:97] + '...'
+                    return value_str
+            except:
+                pass
+        
+        # Format shape normally
         if isinstance(shape, tuple):
-            shape_str = ' × '.join(map(str, shape))
+            return f"[{' × '.join(map(str, shape))}]"
         else:
-            shape_str = str(shape)
+            return f"[{shape}]"
+    
+    def _add_item(self, parent, name, shape, dtype, path, compatible=True, data=None):
+        display_text = self._get_shape_display(shape, data)
         
         # Create item
         prefix = ""# "✓ " if compatible else "  "
         item = self.QtWidgets.QTreeWidgetItem([f"{prefix}{name}"])
-        item.setText(1, f"[{shape_str}]" if shape_str else "")
+        item.setText(1, display_text)
         item.setText(2, str(dtype))
         item.setData(0, self.QtCore.Qt.UserRole, path)
         item.setData(0, self.QtCore.Qt.UserRole + 1, compatible)
@@ -267,7 +295,11 @@ class H5DatasetSelector(DatasetSelector):
         compatible = []
 
         def visit_func(name, obj):
-            if isinstance(obj, h5.Dataset) and hasattr(obj, 'ndim') and obj.ndim >= 1:
+            if isinstance(obj, h5.Dataset):
+                # Include datasets with ndim >= 1, or scalar datasets (ndim == 0) with string/object types
+                is_array_like = obj.ndim >= 1
+                is_scalar_value = obj.ndim == 0 and obj.dtype.kind in ('U', 'S', 'O')
+                
                 if self._is_compound_dataset(obj):
                     # Only add dataset itself if it has both real and imag fields
                     names = obj.dtype.names or ()
@@ -282,7 +314,9 @@ class H5DatasetSelector(DatasetSelector):
                             if is_array:
                                 field_path = f"{name}/{field_name}"
                                 compatible.append((field_path, shape))
-                elif np.issubdtype(obj.dtype, np.number):
+                elif is_array_like and (np.issubdtype(obj.dtype, np.number) or obj.dtype.kind in ('U', 'S', 'O')):
+                    compatible.append((name, obj.shape))
+                elif is_scalar_value:
                     compatible.append((name, obj.shape))
 
         self.h5_file.visititems(visit_func)
@@ -352,13 +386,14 @@ class H5DatasetSelector(DatasetSelector):
                             field_path = f"{full_path}/{field_name}"
                             shape, dtype, is_array = self._get_compound_field_info(item, field_name)
                             field_compatible = field_path in self.compatible_paths
+                            
                             # Show all fields (arrays as enabled, scalars as disabled)
                             self._add_item(dataset_item, field_name, shape, dtype, 
-                                         field_path, field_compatible)
+                                         field_path, field_compatible, data=item[field_name])
                     else:
                         # Regular dataset
                         self._add_item(parent_item, key, item.shape, item.dtype, 
-                                      full_path, is_compatible)
+                                      full_path, is_compatible, data=item)
         
         add_items(self.tree, self.h5_file)
 
@@ -398,7 +433,7 @@ class NpzDatasetSelector(DatasetSelector):
     
     def _build_tree(self):
         for name, shape, dtype in self.compatible_datasets: # flat and simple
-            self._add_item(self.tree, name, shape, dtype, name, compatible=True)
+            self._add_item(self.tree, name, shape, dtype, name, compatible=True, data=self.npz_file[name])
 
 
 class MatDatasetSelector(DatasetSelector):
@@ -420,6 +455,9 @@ class MatDatasetSelector(DatasetSelector):
     def _is_numeric_array(self, val):
         return isinstance(val, np.ndarray) and np.issubdtype(val.dtype, np.number) and val.ndim >= 1
     
+    def _is_string_array(self, val):
+        return isinstance(val, np.ndarray) and val.dtype.kind in ('U', 'S', 'O') and val.ndim >= 1
+    
     def _has_numeric_data(self, var):
         if not isinstance(var, np.ndarray):
             return False
@@ -431,7 +469,7 @@ class MatDatasetSelector(DatasetSelector):
                     return True
             return False
         
-        return self._is_numeric_array(var)
+        return self._is_numeric_array(var) or self._is_string_array(var)
     
     def _find_compatible_datasets(self):
         compatible = []
@@ -477,9 +515,9 @@ class MatDatasetSelector(DatasetSelector):
                 field_path = f"{name}/{field_name}"
                 self._add_field(field_name, field_val, field_path, item)
         
-        elif self._is_numeric_array(val):
-            # Add numeric array
-            self._add_item(parent, name, val.shape, val.dtype, name, compatible=True)
+        elif self._is_numeric_array(val) or self._is_string_array(val):
+            # Add numeric or string array
+            self._add_item(parent, name, val.shape, val.dtype, name, compatible=True, data=val)
     
     def _add_field(self, field_name, field_val, field_path, parent):
         """Add struct field to tree (handles nested structs)."""
@@ -494,9 +532,9 @@ class MatDatasetSelector(DatasetSelector):
                 nested_path = f"{field_path}/{nested_field}"
                 self._add_field(nested_field, nested_val, nested_path, item)
         
-        elif self._is_numeric_array(field_val):
-            # Numeric field - compatible
-            self._add_item(parent, field_name, field_val.shape, field_val.dtype, field_path, compatible=True)
+        elif self._is_numeric_array(field_val) or self._is_string_array(field_val):
+            # Numeric or string field - compatible
+            self._add_item(parent, field_name, field_val.shape, field_val.dtype, field_path, compatible=True, data=field_val)
         
         else:
             # Non-numeric field (string, cell, etc.) - show but disable
