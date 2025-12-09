@@ -296,9 +296,10 @@ class H5DatasetSelector(DatasetSelector):
 
         def visit_func(name, obj):
             if isinstance(obj, h5.Dataset):
-                # Include datasets with ndim >= 1, or scalar datasets (ndim == 0) with string/object types
-                is_array_like = obj.ndim >= 1
-                is_scalar_value = obj.ndim == 0 and obj.dtype.kind in ('U', 'S', 'O')
+                # Only include numeric arrays with more than 1 element (strings are always incompatible)
+                is_compatible = (obj.ndim >= 1 and 
+                                np.issubdtype(obj.dtype, np.number) and 
+                                np.prod(obj.shape) > 1)
                 
                 if self._is_compound_dataset(obj):
                     # Only add dataset itself if it has both real and imag fields
@@ -311,12 +312,10 @@ class H5DatasetSelector(DatasetSelector):
                         # Still allow array fields (e.g. for ISMRMRD style)
                         for field_name in names:
                             shape, dtype, is_array = self._get_compound_field_info(obj, field_name)
-                            if is_array:
+                            if is_array and np.prod(shape) > 1:
                                 field_path = f"{name}/{field_name}"
                                 compatible.append((field_path, shape))
-                elif is_array_like and (np.issubdtype(obj.dtype, np.number) or obj.dtype.kind in ('U', 'S', 'O')):
-                    compatible.append((name, obj.shape))
-                elif is_scalar_value:
+                elif is_compatible:
                     compatible.append((name, obj.shape))
 
         self.h5_file.visititems(visit_func)
@@ -416,7 +415,10 @@ class NpzDatasetSelector(DatasetSelector):
         compatible = []
         for key in self.npz_file.keys():
             arr = self.npz_file[key]
-            if hasattr(arr, 'ndim') and arr.ndim >= 1:
+            # Only include numeric arrays with more than 1 element
+            if (hasattr(arr, 'ndim') and arr.ndim >= 1 and 
+                np.issubdtype(arr.dtype, np.number) and 
+                np.prod(arr.shape) > 1):
                 compatible.append((key, arr.shape, arr.dtype))
         return compatible
     
@@ -453,10 +455,14 @@ class MatDatasetSelector(DatasetSelector):
         return isinstance(val, np.ndarray) and hasattr(val.dtype, 'names') and val.dtype.names is not None
     
     def _is_numeric_array(self, val):
-        return isinstance(val, np.ndarray) and np.issubdtype(val.dtype, np.number) and val.ndim >= 1
+        return isinstance(val, np.ndarray) and np.issubdtype(val.dtype, np.number) and val.ndim >= 1 and np.prod(val.shape) > 1
     
     def _is_string_array(self, val):
         return isinstance(val, np.ndarray) and val.dtype.kind in ('U', 'S', 'O') and val.ndim >= 1
+    
+    def _is_any_array(self, val):
+        """Check if value is any kind of array (for display in tree)."""
+        return isinstance(val, np.ndarray) and val.ndim >= 1
     
     def _has_numeric_data(self, var):
         if not isinstance(var, np.ndarray):
@@ -469,7 +475,7 @@ class MatDatasetSelector(DatasetSelector):
                     return True
             return False
         
-        return self._is_numeric_array(var) or self._is_string_array(var)
+        return self._is_numeric_array(var)
     
     def _find_compatible_datasets(self):
         compatible = []
@@ -515,9 +521,10 @@ class MatDatasetSelector(DatasetSelector):
                 field_path = f"{name}/{field_name}"
                 self._add_field(field_name, field_val, field_path, item)
         
-        elif self._is_numeric_array(val) or self._is_string_array(val):
-            # Add numeric or string array
-            self._add_item(parent, name, val.shape, val.dtype, name, compatible=True, data=val)
+        elif self._is_any_array(val):
+            # Add any array (numeric compatible, strings incompatible)
+            is_compatible = self._is_numeric_array(val)
+            self._add_item(parent, name, val.shape, val.dtype, name, compatible=is_compatible, data=val)
     
     def _add_field(self, field_name, field_val, field_path, parent):
         """Add struct field to tree (handles nested structs)."""
@@ -532,10 +539,11 @@ class MatDatasetSelector(DatasetSelector):
                 nested_path = f"{field_path}/{nested_field}"
                 self._add_field(nested_field, nested_val, nested_path, item)
         
-        elif self._is_numeric_array(field_val) or self._is_string_array(field_val):
-            # Numeric or string field - compatible
-            self._add_item(parent, field_name, field_val.shape, field_val.dtype, field_path, compatible=True, data=field_val)
+        elif self._is_any_array(field_val):
+            # Add any array (numeric compatible, strings incompatible)
+            is_compatible = self._is_numeric_array(field_val)
+            self._add_item(parent, field_name, field_val.shape, field_val.dtype, field_path, compatible=is_compatible, data=field_val)
         
         else:
-            # Non-numeric field (string, cell, etc.) - show but disable
+            # Non-array field - show but disable
             self._add_item(parent, field_name, field_val.shape, field_val.dtype, None, compatible=False)
