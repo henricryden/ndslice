@@ -41,7 +41,10 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             continue
         
         try:
-            suffix = ''.join(filepath.suffixes).lower()
+            if filepath.name.lower().endswith('.nii.gz'):
+                suffix = '.nii.gz'
+            else:
+                suffix = filepath.suffix.lower()
             # Single-dataset formats is handled by file_interpreters.load_file
             if suffix in ['.npy', '.rec', '.cfl', '.dcm', '.nii', '.nii.gz', '.txt']:
                 data = load_file(filepath)
