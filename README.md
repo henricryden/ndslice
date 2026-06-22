@@ -87,8 +87,14 @@ ndslice(data1, block=True)  # Script pauses here
 ndslice(data2)  # Shown after first closes
 ```
 
+If Qt is already initialized in the current process, `ndslice(..., block=False)`
+cannot safely fork a child process. In that case:
+
+- In IPython/Jupyter with `%gui qt`, ndslice opens inline in the current process (still non-blocking).
+- Without an active Qt event loop, ndslice falls back to blocking mode and emits a warning.
 
 ### Command Line
+
 ```bash
 ndslice data.npy # Numpy file
 ndslice image.nii.gz
