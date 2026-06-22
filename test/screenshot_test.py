@@ -33,14 +33,35 @@ def take_screenshot(win, path: Path):
     print(f"Screenshot saved: {path}  ({size} bytes)")
 
 
-def take_screen_screenshot(app, path: Path):
-    """Grab the current screen, including popup widgets."""
-    screen = app.primaryScreen()
-    assert screen is not None, "No primary screen available"
-    pixmap = screen.grabWindow(0)
-    assert not pixmap.isNull(), "screen grab returned a null pixmap"
+def take_widget_composite_screenshot(widgets, path: Path):
+    """Grab visible widgets and stitch them into one screenshot."""
+    from pyqtgraph.Qt import QtGui
+
+    pixmaps = []
+    for widget in widgets:
+        if widget is None or not widget.isVisible():
+            continue
+        pixmap = widget.grab()
+        assert not pixmap.isNull(), f"grab() returned a null pixmap for {widget!r}"
+        pixmaps.append(pixmap)
+
+    assert pixmaps, "No visible widgets available for screenshot"
+
+    spacing = 8
+    width = max(pixmap.width() for pixmap in pixmaps)
+    height = sum(pixmap.height() for pixmap in pixmaps) + spacing * (len(pixmaps) - 1)
+    combined = QtGui.QPixmap(width, height)
+    combined.fill(QtGui.QColor("white"))
+
+    painter = QtGui.QPainter(combined)
+    y = 0
+    for pixmap in pixmaps:
+        painter.drawPixmap(0, y, pixmap)
+        y += pixmap.height() + spacing
+    painter.end()
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    ok = pixmap.save(str(path), "PNG")
+    ok = combined.save(str(path), "PNG")
     assert ok, f"Failed to save screenshot to {path}"
     size = path.stat().st_size
     assert size > 1000, f"Screenshot suspiciously small ({size} bytes)"
@@ -91,7 +112,10 @@ def main():
     flush_qt_events(app)
 
     settings_out = out_dir / f"screenshot_settings_menu_{sys.platform}.png"
-    take_screen_screenshot(app, settings_out)
+    take_widget_composite_screenshot(
+        [win._settings_menu, combo.view().window()],
+        settings_out,
+    )
 
     combo.hidePopup()
     win._settings_menu.hide()
