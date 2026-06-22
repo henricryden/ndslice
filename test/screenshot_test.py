@@ -33,6 +33,25 @@ def take_screenshot(win, path: Path):
     print(f"Screenshot saved: {path}  ({size} bytes)")
 
 
+def take_screen_screenshot(app, path: Path):
+    """Grab the current screen, including popup widgets."""
+    screen = app.primaryScreen()
+    assert screen is not None, "No primary screen available"
+    pixmap = screen.grabWindow(0)
+    assert not pixmap.isNull(), "screen grab returned a null pixmap"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok = pixmap.save(str(path), "PNG")
+    assert ok, f"Failed to save screenshot to {path}"
+    size = path.stat().st_size
+    assert size > 1000, f"Screenshot suspiciously small ({size} bytes)"
+    print(f"Screenshot saved: {path}  ({size} bytes)")
+
+
+def flush_qt_events(app, count=5):
+    for _ in range(count):
+        app.processEvents()
+
+
 def main():
     import argparse
     import pyqtgraph as pg
@@ -55,12 +74,28 @@ def main():
     win.show()
 
     # Let Qt process events so the image actually renders
-    for _ in range(5):
-        app.processEvents()
+    flush_qt_events(app)
 
     out_dir = Path(args.out) if args.out else Path(__file__).parent / "screenshots"
     out = out_dir / f"screenshot_{sys.platform}.png"
     take_screenshot(win, out)
+
+    button = win._settings_btn
+    menu_pos = button.mapToGlobal(button.rect().bottomLeft())
+    win._settings_menu.popup(menu_pos)
+    flush_qt_events(app)
+    assert win._settings_menu.isVisible(), "Settings menu did not open"
+
+    combo = win._colormap_combo
+    combo.showPopup()
+    flush_qt_events(app)
+
+    settings_out = out_dir / f"screenshot_settings_menu_{sys.platform}.png"
+    take_screen_screenshot(app, settings_out)
+
+    combo.hidePopup()
+    win._settings_menu.hide()
+    flush_qt_events(app)
 
     win.close()
     app.quit()
