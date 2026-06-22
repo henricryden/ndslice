@@ -5,12 +5,34 @@ from pyqtgraph.Qt import QtWidgets, QtGui
 import os
 import math
 import platform
+from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 from .imageview2d import ImageView2D
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
+from .config import (
+    DEFAULT_COLORMAP, 
+    DEFAULT_DISPLAY_MODE, 
+    INITIAL_INDEX_CENTER, 
+    INITIAL_INDEX_FIRST, 
+    INITIAL_INDEX_LAST, 
+    SUPPORTED_DISPLAY_MODES, 
+    load_config, 
+    save_config, 
+)
 import multiprocessing as mp
 import warnings
+
+COLORMAP_NAMES = (
+    "gray",
+    "viridis",
+    "plasma",
+    "PAL-relaxed",
+    "cividis",
+    "CET-CBL1",
+    "d3-cool",
+    "d3-warm",
+)
 
 try:
     from IPython import get_ipython
@@ -331,6 +353,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     SPINBOX_STYLE = "QSpinBox { font-size: 9pt; } QSpinBox:disabled { color: palette(mid); }"
     RADIO_BUTTON_STYLE = "QRadioButton { font-size: 9pt; }"
     GROUPBOX_BASE_STYLE = "QGroupBox { font-size: 9pt; font-weight: bold; border: 1px solid palette(mid); border-radius: 3px; margin-top: 1.4ex; padding-top: 3pt; } QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
+    DISPLAY_MODE_LABELS = {
+        "square_pixels": "Square pixels",
+        "square_fov": "Square FOV",
+        "fit": "Fit",
+    }
+    INITIAL_INDEX_LABELS = {
+        "first": "First",
+        "center": "Center",
+        "last": "Last",
+    }
     
     @staticmethod
     def _set_emoji_font(widget):
@@ -339,11 +371,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             font.setFamily('Apple Color Emoji')
             widget.setFont(font)
 
-    def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None, selector_class_name=None):
+    def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
+                 selector_class_name=None, config_path=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
+        self._config_path = config_path
+        self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
+        self.current_colormap = DEFAULT_COLORMAP
         self.singleton = [e == 1 for e in list(data.shape)]
         self.selected_indices = []
         self.channel = None
@@ -762,6 +798,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.layouts['topUp'].addWidget(self._reload_btn)
         self.layouts['topUp'].addWidget(self.widgets['labels']['pixelValue'])
         self.layouts['topUp'].addWidget(self.widgets['labels']['arrayInfo'])
+        self.layouts['topUp'].addStretch(1)
+
+        self._settings_btn = self._create_settings_button()
+        self.layouts['topUp'].addWidget(self._settings_btn)
 
         self.layouts['botLeft'].addLayout(self.layouts['dims'])
         
@@ -808,6 +848,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
+        self._apply_startup_indices()
+        self.setColormap(self._viewer_config.default_colormap)
+        self._apply_default_display_mode()
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
@@ -822,7 +865,206 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
 
 
-    
+
+    def _create_settings_button(self):
+        button = QtWidgets.QToolButton(self)
+        button.setText("⚙")
+        button.setToolTip("Settings")
+        button.setAutoRaise(True)
+        button.setFixedSize(28, 24)
+        button.setStyleSheet("QToolButton { font-size: 15pt; padding: 0px; margin: 0px; }")
+        self._set_emoji_font(button)
+
+        try:
+            button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        except AttributeError:
+            button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+        menu = QtWidgets.QMenu(button)
+        self._settings_menu = menu
+
+        initial_index_row = QtWidgets.QWidget(menu)
+        initial_index_layout = QtWidgets.QHBoxLayout()
+        initial_index_layout.setContentsMargins(8, 4, 8, 4)
+        initial_index_layout.setSpacing(8)
+
+        initial_index_label = QtWidgets.QLabel("Initial indices")
+        self._initial_index_combo = QtWidgets.QComboBox(initial_index_row)
+        for initial_index in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
+            self._initial_index_combo.addItem(
+                self.INITIAL_INDEX_LABELS.get(initial_index, initial_index),
+                initial_index,
+            )
+
+        initial_index = self._initial_index_combo.findData(
+            self._viewer_config.initial_index
+        )
+        if initial_index < 0:
+            initial_index = self._initial_index_combo.findData(INITIAL_INDEX_FIRST)
+        self._initial_index_combo.setCurrentIndex(max(0, initial_index))
+        self._initial_index_combo.currentIndexChanged.connect(
+            self._on_initial_index_changed
+        )
+
+        initial_index_layout.addWidget(initial_index_label)
+        initial_index_layout.addWidget(self._initial_index_combo)
+        initial_index_row.setLayout(initial_index_layout)
+
+        initial_index_action = QtWidgets.QWidgetAction(menu)
+        initial_index_action.setDefaultWidget(initial_index_row)
+        menu.addAction(initial_index_action)
+
+        menu.addSeparator()
+
+        colormap_row = QtWidgets.QWidget(menu)
+        colormap_layout = QtWidgets.QHBoxLayout()
+        colormap_layout.setContentsMargins(8, 4, 8, 4)
+        colormap_layout.setSpacing(8)
+
+        colormap_label = QtWidgets.QLabel("Default colormap")
+        self._colormap_combo = QtWidgets.QComboBox(colormap_row)
+        self._colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        for colormap_name in COLORMAP_NAMES:
+            self._colormap_combo.addItem(self._colormap_icon(colormap_name), colormap_name)
+
+        index = self._colormap_combo.findText(self._viewer_config.default_colormap)
+        if index < 0:
+            index = self._colormap_combo.findText(DEFAULT_COLORMAP)
+        self._colormap_combo.setCurrentIndex(max(0, index))
+        self._colormap_combo.currentTextChanged.connect(self._on_default_colormap_changed)
+
+        colormap_layout.addWidget(colormap_label)
+        colormap_layout.addWidget(self._colormap_combo)
+        colormap_row.setLayout(colormap_layout)
+
+        colormap_action = QtWidgets.QWidgetAction(menu)
+        colormap_action.setDefaultWidget(colormap_row)
+        menu.addAction(colormap_action)
+
+        display_row = QtWidgets.QWidget(menu)
+        display_layout = QtWidgets.QHBoxLayout()
+        display_layout.setContentsMargins(8, 4, 8, 4)
+        display_layout.setSpacing(8)
+
+        display_label = QtWidgets.QLabel("Default display")
+        self._display_mode_combo = QtWidgets.QComboBox(display_row)
+        for display_mode in SUPPORTED_DISPLAY_MODES:
+            self._display_mode_combo.addItem(
+                self.DISPLAY_MODE_LABELS.get(display_mode, display_mode),
+                display_mode,
+            )
+
+        display_index = self._display_mode_combo.findData(
+            self._viewer_config.default_display_mode
+        )
+        if display_index < 0:
+            display_index = self._display_mode_combo.findData(DEFAULT_DISPLAY_MODE)
+        self._display_mode_combo.setCurrentIndex(max(0, display_index))
+        self._display_mode_combo.currentIndexChanged.connect(
+            self._on_default_display_mode_changed
+        )
+
+        display_layout.addWidget(display_label)
+        display_layout.addWidget(self._display_mode_combo)
+        display_row.setLayout(display_layout)
+
+        display_action = QtWidgets.QWidgetAction(menu)
+        display_action.setDefaultWidget(display_row)
+        menu.addAction(display_action)
+
+        button.setMenu(menu)
+        return button
+
+    def _apply_startup_indices(self):
+        initial_index = self._viewer_config.initial_index
+
+        for dim, spinbox in enumerate(self.widgets['spins']['slice_indices']):
+            if initial_index == INITIAL_INDEX_CENTER:
+                spinbox.setValue((self.data.shape[dim] - 1) // 2)
+            elif initial_index == INITIAL_INDEX_LAST:
+                spinbox.setValue(self.data.shape[dim] - 1)
+            else:
+                spinbox.setValue(0)
+
+    def _apply_default_display_mode(self):
+        self._set_display_mode(self._viewer_config.default_display_mode)
+
+    def _set_display_mode(self, display_mode):
+        if display_mode not in SUPPORTED_DISPLAY_MODES:
+            display_mode = DEFAULT_DISPLAY_MODE
+
+        button = self.widgets['buttons']['display'].get(display_mode)
+        if button is None:
+            return
+
+        button.setChecked(True)
+        self.update_display_mode()
+
+    def _on_initial_index_changed(self, index):
+        initial_index = self._initial_index_combo.itemData(index)
+        if initial_index not in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
+            initial_index = INITIAL_INDEX_FIRST
+
+        self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
+        self._save_viewer_config()
+
+    def _on_default_colormap_changed(self, colormap_name):
+        if colormap_name not in COLORMAP_NAMES:
+            colormap_name = DEFAULT_COLORMAP
+
+        self._viewer_config = replace(self._viewer_config, default_colormap=colormap_name)
+        self._save_viewer_config()
+        self.setColormap(colormap_name)
+
+    def _on_default_display_mode_changed(self, index):
+        display_mode = self._display_mode_combo.itemData(index)
+        if display_mode not in SUPPORTED_DISPLAY_MODES:
+            display_mode = DEFAULT_DISPLAY_MODE
+
+        self._viewer_config = replace(
+            self._viewer_config,
+            default_display_mode=display_mode,
+        )
+        self._save_viewer_config()
+        self._set_display_mode(display_mode)
+
+    def _save_viewer_config(self):
+        try:
+            save_config(
+                self._viewer_config,
+                self._config_path,
+                colormap_names=COLORMAP_NAMES,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Settings Error",
+                f"Failed to save settings:\n{e}",
+            )
+
+    def _colormap_icon(self, colormap_name):
+        pixmap = QtGui.QPixmap(96, 16)
+        pixmap.fill(Qt.QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+
+        try:
+            color_map = self._get_colormap(colormap_name)
+            lut = color_map.getLookupTable(0.0, 1.0, pixmap.width(), alpha=False)
+            for x, color in enumerate(lut):
+                painter.setPen(QtGui.QColor(int(color[0]), int(color[1]), int(color[2])))
+                painter.drawLine(x, 0, x, pixmap.height() - 1)
+        except Exception:
+            pixmap.fill(QtGui.QColor("black"))
+        finally:
+            painter.end()
+
+        border_painter = QtGui.QPainter(pixmap)
+        border_painter.setPen(QtGui.QColor(120, 120, 120))
+        border_painter.drawRect(0, 0, pixmap.width() - 1, pixmap.height() - 1)
+        border_painter.end()
+        return QtGui.QIcon(pixmap)
+
+
     def dimClicked(self, event, label, dim):
         if self.singleton[dim]:
             return
@@ -1505,72 +1747,50 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Check CTRL+number for colormap changes
         if modifiers == Qt.QtCore.Qt.KeyboardModifier.ControlModifier:
-            if key == Qt.QtCore.Qt.Key.Key_1:
-                self.setColormap('gray')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_2:
-                self.setColormap('viridis')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_3:
-                self.setColormap('plasma')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_4:
-                self.setColormap('PAL-relaxed')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_5:
-                self.setColormap('cividis')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_6:
-                self.setColormap('CET-CBL1')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_7:
-                self.setColormap('d3-cool')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_8:
-                self.setColormap('d3-warm')
+            shortcut_keys = (
+                Qt.QtCore.Qt.Key.Key_1,
+                Qt.QtCore.Qt.Key.Key_2,
+                Qt.QtCore.Qt.Key.Key_3,
+                Qt.QtCore.Qt.Key.Key_4,
+                Qt.QtCore.Qt.Key.Key_5,
+                Qt.QtCore.Qt.Key.Key_6,
+                Qt.QtCore.Qt.Key.Key_7,
+                Qt.QtCore.Qt.Key.Key_8,
+            )
+            shortcut_map = dict(zip(shortcut_keys, COLORMAP_NAMES))
+            if key in shortcut_map:
+                self.setColormap(shortcut_map[key])
                 event.accept()
                 return
                 
         # Pass event to parent if not handled
         super().keyPressEvent(event)
     
+    def _get_colormap(self, colormap_name):
+        custom_colormaps = {
+            'gray': self._create_gray_colormap,
+            'd3-warm': self._create_d3_warm_colormap,
+            'd3-cool': self._create_d3_cool_colormap,
+        }
+        if colormap_name in custom_colormaps:
+            return custom_colormaps[colormap_name]()
+
+        if colormap_name in COLORMAP_NAMES:
+            return pg.colormap.get(colormap_name)
+
+        raise ValueError(f"Unknown colormap: {colormap_name}")
+
     def setColormap(self, colormap_name):
-        """Set the colormap for the image view"""
+        """Set the colormap for the image view."""
         try:
-            if colormap_name == 'gray':
-                colormap = self._create_gray_colormap()
-            elif colormap_name == 'viridis':
-                colormap = pg.colormap.get('viridis')
-            elif colormap_name == 'PAL-relaxed':
-                colormap = pg.colormap.get('PAL-relaxed')
-            elif colormap_name == 'plasma':
-                colormap = pg.colormap.get('plasma')
-            elif colormap_name == 'd3-warm':
-                colormap = self._create_d3_warm_colormap()
-            elif colormap_name == 'd3-cool':
-                colormap = self._create_d3_cool_colormap()
-            elif colormap_name == 'CET-CBL1':
-                colormap = pg.colormap.get('CET-CBL1')
-            elif colormap_name == 'cividis':
-                colormap = pg.colormap.get('cividis')
-            else:
-                print(f"Unknown colormap: {colormap_name}")
-                return
-            
+            colormap = self._get_colormap(colormap_name)
+
             if colormap is None:
                 print(f"Failed to load colormap '{colormap_name}': returned None")
                 return
             
-            # Apply colormap to the image view
             self.img_view.setColorMap(colormap)
-            #self.current_colormap = colormap_name
+            self.current_colormap = colormap_name
             
         except Exception as e:
             print(f"Failed to set colormap {colormap_name}: {e}")
@@ -1907,7 +2127,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             win = NDSliceWindow(new_data,
                                 filepath=self._filepath,
                                 dataset_path=self._dataset_path,
-                                selector_class_name=self._selector_class_name)
+                                selector_class_name=self._selector_class_name,
+                                config_path=self._config_path)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
