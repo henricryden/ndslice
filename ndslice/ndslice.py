@@ -15,11 +15,13 @@ from .config import (
     DEFAULT_CHANNEL,
     DEFAULT_COLORMAP, 
     DEFAULT_DISPLAY_MODE, 
+    DEFAULT_ORIGIN,
     INITIAL_INDEX_CENTER, 
     INITIAL_INDEX_FIRST, 
     INITIAL_INDEX_LAST, 
     SUPPORTED_CHANNELS,
     SUPPORTED_DISPLAY_MODES, 
+    SUPPORTED_ORIGINS,
     load_config, 
     save_config, 
 )
@@ -365,6 +367,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         "first": "First",
         "center": "Center",
         "last": "Last",
+    }
+    ORIGIN_LABELS = {
+        "upper_left": "Upper left",
+        "lower_left": "Lower left",
+        "upper_right": "Upper right",
+        "lower_right": "Lower right",
     }
     CHANNEL_LABELS = {
         "auto": "Auto",
@@ -859,6 +867,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
         self._apply_startup_indices()
+        self._apply_initial_origin()
         self._apply_default_display_mode()
         self._apply_default_channel()
         self._apply_effective_colormap()
@@ -924,6 +933,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         initial_index_action = QtWidgets.QWidgetAction(menu)
         initial_index_action.setDefaultWidget(initial_index_row)
         menu.addAction(initial_index_action)
+
+        origin_row = QtWidgets.QWidget(menu)
+        origin_layout = QtWidgets.QHBoxLayout()
+        origin_layout.setContentsMargins(8, 4, 8, 4)
+        origin_layout.setSpacing(8)
+
+        origin_label = QtWidgets.QLabel("Initial origin")
+        self._origin_combo = QtWidgets.QComboBox(origin_row)
+        for origin in SUPPORTED_ORIGINS:
+            self._origin_combo.addItem(
+                self.ORIGIN_LABELS.get(origin, origin),
+                origin,
+            )
+
+        origin_index = self._origin_combo.findData(self._viewer_config.initial_origin)
+        if origin_index < 0:
+            origin_index = self._origin_combo.findData(DEFAULT_ORIGIN)
+        self._origin_combo.setCurrentIndex(max(0, origin_index))
+        self._origin_combo.currentIndexChanged.connect(self._on_initial_origin_changed)
+
+        origin_layout.addWidget(origin_label)
+        origin_layout.addWidget(self._origin_combo)
+        origin_row.setLayout(origin_layout)
+
+        origin_action = QtWidgets.QWidgetAction(menu)
+        origin_action.setDefaultWidget(origin_row)
+        menu.addAction(origin_action)
 
         menu.addSeparator()
 
@@ -1058,6 +1094,26 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             else:
                 spinbox.setValue(0)
 
+    def _apply_initial_origin(self):
+        self._set_origin(self._viewer_config.initial_origin)
+
+    def _set_origin(self, origin):
+        if origin not in SUPPORTED_ORIGINS:
+            origin = DEFAULT_ORIGIN
+
+        flip_y = origin.startswith("upper")
+        flip_x = origin.endswith("right")
+
+        if self.is_line_plot_mode():
+            self.axis_flipped[self.line_plot_dimension] = flip_x
+        elif len(self.selected_indices) >= 1:
+            self.axis_flipped[self.selected_indices[0]] = flip_y
+            if len(self.selected_indices) >= 2:
+                self.axis_flipped[self.selected_indices[1]] = flip_x
+
+        self.update_flip_icons()
+        self.apply_axis_flips()
+
     def _apply_default_display_mode(self):
         self._set_display_mode(self._viewer_config.default_display_mode)
 
@@ -1118,6 +1174,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
         self._save_viewer_config()
+
+    def _on_initial_origin_changed(self, index):
+        origin = self._origin_combo.itemData(index)
+        if origin not in SUPPORTED_ORIGINS:
+            origin = DEFAULT_ORIGIN
+
+        self._viewer_config = replace(self._viewer_config, initial_origin=origin)
+        self._save_viewer_config()
+        self._set_origin(origin)
 
     def _on_default_channel_changed(self, index):
         channel = self._channel_combo.itemData(index)
@@ -2314,6 +2379,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
+        self._apply_initial_origin()
         self.update_dimension_controls()
         self._force_autolevel = True
         self.update()

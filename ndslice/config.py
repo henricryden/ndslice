@@ -25,6 +25,13 @@ SUPPORTED_CHANNELS = (
     "imag",
     "angle",
 )
+DEFAULT_ORIGIN = "lower_left"
+SUPPORTED_ORIGINS = (
+    "upper_left",
+    "lower_left",
+    "upper_right",
+    "lower_right",
+)
 DEFAULT_DISPLAY_MODE = "square_pixels"
 SUPPORTED_DISPLAY_MODES = (
     "square_pixels",
@@ -36,6 +43,7 @@ SUPPORTED_DISPLAY_MODES = (
 @dataclass(frozen=True)
 class ViewerConfig:
     initial_index: str = INITIAL_INDEX_FIRST
+    initial_origin: str = DEFAULT_ORIGIN
     default_channel: str = DEFAULT_CHANNEL
     default_colormap: str = DEFAULT_COLORMAP
     angle_colormap: str = ANGLE_COLORMAP_SAME
@@ -68,6 +76,10 @@ def load_config(path=None, colormap_names=None):
     if initial_index not in VALID_INITIAL_INDEX:
         initial_index = INITIAL_INDEX_FIRST
 
+    initial_origin = startup.get("initial_origin", DEFAULT_ORIGIN)
+    if initial_origin not in SUPPORTED_ORIGINS:
+        initial_origin = DEFAULT_ORIGIN
+
     default_channel = display.get("default_channel", DEFAULT_CHANNEL)
     if default_channel not in SUPPORTED_CHANNELS:
         default_channel = DEFAULT_CHANNEL
@@ -91,6 +103,7 @@ def load_config(path=None, colormap_names=None):
 
     return ViewerConfig(
         initial_index=initial_index,
+        initial_origin=initial_origin,
         default_channel=default_channel,
         default_colormap=default_colormap,
         angle_colormap=angle_colormap,
@@ -107,6 +120,10 @@ def save_config(config, path=None, colormap_names=None):
     initial_index = config.initial_index
     if initial_index not in VALID_INITIAL_INDEX:
         initial_index = INITIAL_INDEX_FIRST
+
+    initial_origin = config.initial_origin
+    if initial_origin not in SUPPORTED_ORIGINS:
+        initial_origin = DEFAULT_ORIGIN
 
     default_channel = config.default_channel
     if default_channel not in SUPPORTED_CHANNELS:
@@ -132,6 +149,7 @@ def save_config(config, path=None, colormap_names=None):
     text = (
         "[startup]\n"
         f'initial_index = "{initial_index}"\n'
+        f'initial_origin = "{initial_origin}"\n'
         "\n"
         "[display]\n"
         f'default_channel = "{default_channel}"\n'
