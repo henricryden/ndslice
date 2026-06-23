@@ -23,6 +23,75 @@ def remove_trailing_singletons(data):
     return data.reshape(shape[:dim+1])
 
 
+def _nifti_dim_labels(ndim):
+    labels = [''] * ndim
+    for dim, label in enumerate(('X', 'Y', 'Z', 'T')):
+        if dim < ndim:
+            labels[dim] = label
+    return labels
+
+
+def _valid_spacing_value(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) and value > 0 else None
+
+
+def _nifti_voxel_spacing(zooms, ndim):
+    spacing = [None] * ndim
+    for dim in range(min(ndim, 3, len(zooms))):
+        spacing[dim] = _valid_spacing_value(zooms[dim])
+    return spacing
+
+
+def _dicom_pixel_voxel_spacing(pixel_spacing, ndim):
+    spacing = [None] * ndim
+    if pixel_spacing is None or ndim < 2:
+        return spacing
+
+    values = list(pixel_spacing)
+    if len(values) < 2:
+        return spacing
+
+    spacing[-2] = _valid_spacing_value(values[0])
+    spacing[-1] = _valid_spacing_value(values[1])
+    return spacing
+
+
+def _metadata_voxel_spacing(voxel_spacing, ndim):
+    spacing = [None] * ndim
+    if voxel_spacing is None:
+        return spacing
+
+    for dim, value in enumerate(voxel_spacing):
+        if dim >= ndim:
+            break
+        spacing[dim] = _valid_spacing_value(value)
+    return spacing
+
+
+def _append_dim_label(dim_labels, label):
+    labels = list(dim_labels or [])
+    labels.append(label or '')
+    return labels
+
+
+def _append_voxel_spacing(voxel_spacing, spacing):
+    values = list(voxel_spacing or [])
+    values.append(spacing)
+    return values
+
+
+def _reverse_spatial_metadata(values, ndim):
+    values = list(values or [])
+    values = (values + [None] * ndim)[:ndim]
+    spatial_ndim = min(3, ndim)
+    values[:spatial_ndim] = reversed(values[:spatial_ndim])
+    return values
+
+
 class PhilipsRECLoader:
     def __init__(self, rec_path):
         self.rec_path = Path(rec_path)
@@ -273,14 +342,16 @@ class DicomLoader:
             )
 
         data = remove_trailing_singletons(np.asarray(dcm.pixel_array))
+        pixel_spacing = getattr(dcm, 'PixelSpacing', None)
         self.metadata.update({
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
+            'voxel_spacing': _dicom_pixel_voxel_spacing(pixel_spacing, data.ndim),
             'dicom_metadata': {
                 'patient_name': str(getattr(dcm, 'PatientName', '')),
                 'series_description': str(getattr(dcm, 'SeriesDescription', '')),
                 'modality': str(getattr(dcm, 'Modality', '')),
-                'pixel_spacing': list(getattr(dcm, 'PixelSpacing', [])) if hasattr(dcm, 'PixelSpacing') else None,
+                'pixel_spacing': list(pixel_spacing) if pixel_spacing is not None else None,
                 'image_position_patient': list(getattr(dcm, 'ImagePositionPatient', [])) if hasattr(dcm, 'ImagePositionPatient') else None,
             },
         })
@@ -399,6 +470,8 @@ class DicomDirectoryLoader:
             nifti_paths = []
             json_paths = []
             sidecar_metadata = []
+            nifti_dim_labels = []
+            nifti_voxel_spacings = []
 
             for nifti_path, json_path in nifti_outputs:
                 nifti_loader = NiftiLoader(nifti_path)
@@ -406,9 +479,18 @@ class DicomDirectoryLoader:
                 nifti_paths.append(str(nifti_path))
                 json_paths.append(str(json_path) if json_path else None)
                 sidecar_metadata.append(_read_json_sidecar(json_path))
+                nifti_dim_labels.append(nifti_loader.metadata.get('dim_labels', []))
+                nifti_voxel_spacings.append(nifti_loader.metadata.get('voxel_spacing', []))
 
             if len(arrays) == 1:
                 data = arrays[0]
+                base_dim_labels = list(nifti_dim_labels[0]) if nifti_dim_labels else _nifti_dim_labels(data.ndim)
+                dim_labels = _reverse_spatial_metadata(base_dim_labels, data.ndim)
+                base_voxel_spacing = _metadata_voxel_spacing(
+                    nifti_voxel_spacings[0] if nifti_voxel_spacings else None,
+                    data.ndim,
+                )
+                voxel_spacing = base_voxel_spacing
                 stacking_label = None
                 stacking_key = None
                 stacking_values = None
@@ -430,10 +512,20 @@ class DicomDirectoryLoader:
                     if any(description is not None for description in series_descriptions):
                         print(f"  SeriesDescription: {series_descriptions}")
                 data = np.stack(arrays, axis=-1)
+                base_dim_labels = list(nifti_dim_labels[0]) if nifti_dim_labels else _nifti_dim_labels(arrays[0].ndim)
+                base_dim_labels = _reverse_spatial_metadata(base_dim_labels, arrays[0].ndim)
+                dim_labels = _append_dim_label(base_dim_labels, stacking_label)
+                base_voxel_spacing = _metadata_voxel_spacing(
+                    nifti_voxel_spacings[0] if nifti_voxel_spacings else None,
+                    arrays[0].ndim,
+                )
+                voxel_spacing = _append_voxel_spacing(base_voxel_spacing, None)
 
             self.metadata.update({
                 'shape': tuple(data.shape),
                 'dtype': str(data.dtype),
+                'dim_labels': dim_labels,
+                'voxel_spacing': voxel_spacing,
                 'nifti_output_path': nifti_paths[0] if len(nifti_paths) == 1 else nifti_paths,
                 'sidecar_json_path': json_paths[0] if len(json_paths) == 1 else json_paths,
                 'stacked_dimension': stacking_label,
@@ -463,11 +555,14 @@ class NiftiLoader:
                 "Install it with: pip install nibabel"
             )
         
-        data = nib.load(self.file_path).get_fdata()
+        image = nib.load(self.file_path)
+        data = image.get_fdata()
         data = remove_trailing_singletons(data)
         self.metadata.update({
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
+            'dim_labels': _nifti_dim_labels(data.ndim),
+            'voxel_spacing': _nifti_voxel_spacing(image.header.get_zooms(), data.ndim),
         })
         return data
 

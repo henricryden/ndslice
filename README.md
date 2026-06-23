@@ -25,6 +25,8 @@ pha = np.pi/4 * (X + Y + Z)
 complex_data = mag * np.exp(1j * pha)
 
 ndslice(complex_data, title='3D Complex Gaussian')
+# Optional dimension labels:
+ndslice(data, dim_labels=["X", "Y", "Z"])
 ```
 
 ![Showcase](docs/images/showcase.gif)

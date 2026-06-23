@@ -5,12 +5,42 @@ from pyqtgraph.Qt import QtWidgets, QtGui
 import os
 import math
 import platform
+from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 from .imageview2d import ImageView2D
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
+from .config import (
+    ANGLE_COLORMAP_SAME,
+    DEFAULT_CHANNEL,
+    DEFAULT_COLORMAP, 
+    DEFAULT_DISPLAY_MODE, 
+    DEFAULT_ORIGIN,
+    DEFAULT_SLICE_FIRST,
+    DEFAULT_SLICE_LAST,
+    INITIAL_INDEX_CENTER, 
+    INITIAL_INDEX_FIRST, 
+    INITIAL_INDEX_LAST, 
+    SUPPORTED_CHANNELS,
+    SUPPORTED_DISPLAY_MODES, 
+    SUPPORTED_ORIGINS,
+    VALID_DEFAULT_SLICE,
+    load_config, 
+    save_config, 
+)
 import multiprocessing as mp
 import warnings
+
+COLORMAP_NAMES = (
+    "gray",
+    "viridis",
+    "plasma",
+    "PAL-relaxed",
+    "cividis",
+    "CET-CBL1",
+    "d3-cool",
+    "d3-warm",
+)
 
 try:
     from IPython import get_ipython
@@ -331,6 +361,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     SPINBOX_STYLE = "QSpinBox { font-size: 9pt; } QSpinBox:disabled { color: palette(mid); }"
     RADIO_BUTTON_STYLE = "QRadioButton { font-size: 9pt; }"
     GROUPBOX_BASE_STYLE = "QGroupBox { font-size: 9pt; font-weight: bold; border: 1px solid palette(mid); border-radius: 3px; margin-top: 1.4ex; padding-top: 3pt; } QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
+    DISPLAY_MODE_LABELS = {
+        "square_pixels": "Square pixels",
+        "square_fov": "Square FOV",
+        "auto": "Auto/Fit",
+    }
+    INITIAL_INDEX_LABELS = {
+        "first": "First",
+        "center": "Center",
+        "last": "Last",
+    }
+    DEFAULT_SLICE_LABELS = {
+        "first": "First",
+        "last": "Last",
+    }
+    ORIGIN_LABELS = {
+        "upper_left": "Upper left",
+        "lower_left": "Lower left",
+        "upper_right": "Upper right",
+        "lower_right": "Lower right",
+    }
+    CHANNEL_LABELS = {
+        "auto": "Auto",
+        "real": "Real",
+        "abs": "Abs",
+        "imag": "Imag",
+        "angle": "Angle",
+    }
     
     @staticmethod
     def _set_emoji_font(widget):
@@ -339,11 +396,97 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             font.setFamily('Apple Color Emoji')
             widget.setFont(font)
 
-    def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None, selector_class_name=None):
+    @staticmethod
+    # Turns e.g. ["X", None, "T", "extra"] -> ["X", "", "T"] (ndim=3)
+    def _clean_dim_labels(dim_labels, ndim):
+        labels = [''] * ndim
+        if dim_labels is None:
+            return labels
+
+        for dim, label in enumerate(dim_labels):
+            if dim >= ndim:
+                break
+            if label is None:
+                continue
+            label = str(label).strip()
+            if label:
+                labels[dim] = label
+        return labels
+
+    @staticmethod
+    def _clean_voxel_spacing(voxel_spacing, ndim):
+        spacing = [None] * ndim
+        if voxel_spacing is None:
+            return spacing
+
+        for dim, value in enumerate(voxel_spacing):
+            if dim >= ndim:
+                break
+            if value is None:
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value) and value > 0:
+                spacing[dim] = value
+        return spacing
+
+    def _dimension_display_name(self, dim):
+        label = self.dim_labels[dim]
+        return f"{dim}: {label}" if label else str(dim)
+
+    def _apply_dimension_button_labels(self):
+        for i in range(self.data.ndim):
+            display_name = self._dimension_display_name(i)
+            tooltip = f"Dimension {i}"
+            if self.dim_labels[i]:
+                tooltip += f": {self.dim_labels[i]}"
+            self.widgets['buttons']['primary'][i].setText(display_name)
+            self.widgets['buttons']['secondary'][i].setText(display_name)
+            self.widgets['buttons']['primary'][i].setToolTip(tooltip)
+            self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
+
+    @staticmethod
+    def _initial_selected_indices(shape, default_slice):
+        valid_dims = [dim for dim, size in enumerate(shape) if size != 1]
+        if not valid_dims:
+            return [0]
+
+        if default_slice == DEFAULT_SLICE_LAST:
+            selected = valid_dims[-2:]
+        else:
+            selected = valid_dims[:2]
+
+        if len(selected) < 2 and len(shape) >= 2:
+            fallback_dims = range(len(shape) - 1, -1, -1) if default_slice == DEFAULT_SLICE_LAST else range(len(shape))
+            for dim in fallback_dims:
+                if dim not in selected:
+                    selected.append(dim)
+                if len(selected) >= 2:
+                    break
+            selected = sorted(selected)
+
+        return selected
+
+    def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
+                 selector_class_name=None, config_path=None, dim_labels=None,
+                 voxel_spacing=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
+        self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
+        self._has_voxel_spacing_metadata = voxel_spacing is not None
+        self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
+        # if voxel_spacing is not None:
+        #     print("Assumed voxel spacing:")
+        #     for dim, spacing in enumerate(self.voxel_spacing):
+        #         label = self.dim_labels[dim] or str(dim)
+        #         print(f"  dim {dim} ({label}, size {data.shape[dim]}): {spacing}")
+        self._config_path = config_path
+        self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
+        self.current_colormap = DEFAULT_COLORMAP
         self.singleton = [e == 1 for e in list(data.shape)]
         self.selected_indices = []
         self.channel = None
@@ -364,16 +507,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Store complex_dim for later use (after widgets are created)
         self._initial_complex_dim = complex_dim
-        
-        for dim in range(0,data.ndim):
-            if self.singleton[dim] is False and len(self.selected_indices) < 2:
-                self.selected_indices.append(dim)
-        # For 1D arrays, we only need one dimension; for 2D+, ensure we have two
-        if len(self.selected_indices) < 2 and data.ndim >= 2:
-            self.selected_indices = [0, 1]
-        elif len(self.selected_indices) == 0:
-            # Edge case: if all dimensions are singleton, pick first one
-            self.selected_indices = [0]
+
+        self.selected_indices = self._initial_selected_indices(
+            data.shape,
+            self._viewer_config.default_slice,
+        )
         
         # Line plot mode uses a single selected dimension
         self.line_plot_dimension = 0  # Default to first non-singleton dimension
@@ -385,8 +523,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.domain = [Domain.NATIVE for _ in range(data.ndim)]
         self.widgets = {
             'buttons': {
-                'primary': [QtWidgets.QPushButton(str(i), checkable=True) for i in range(data.ndim)],
-                'secondary': [QtWidgets.QPushButton(str(i), checkable=True) for i in range(data.ndim)],
+                'primary': [QtWidgets.QPushButton(self._dimension_display_name(i), checkable=True) for i in range(data.ndim)],
+                'secondary': [QtWidgets.QPushButton(self._dimension_display_name(i), checkable=True) for i in range(data.ndim)],
                 'channel': {
                     'real': QtWidgets.QRadioButton('real', enabled=np.iscomplexobj(self.data)),
                     'imag': QtWidgets.QRadioButton('imag', enabled=np.iscomplexobj(self.data)),
@@ -403,7 +541,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 'display': {
                     'square_pixels': QtWidgets.QRadioButton('Square pixels', checkable=True, checked=True),
                     'square_fov': QtWidgets.QRadioButton('Square FOV', checkable=True),
-                    'fit': QtWidgets.QRadioButton('Fit', checkable=True)
+                    'auto': QtWidgets.QRadioButton('Auto', checkable=True)
                 }
             },
             'labels': {
@@ -440,7 +578,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.display_button_group = QtWidgets.QButtonGroup()
         self.display_button_group.addButton(self.widgets['buttons']['display']['square_pixels'])
         self.display_button_group.addButton(self.widgets['buttons']['display']['square_fov'])
-        self.display_button_group.addButton(self.widgets['buttons']['display']['fit'])
+        self.display_button_group.addButton(self.widgets['buttons']['display']['auto'])
         
         self.layouts = {
             'main': QtWidgets.QVBoxLayout(),
@@ -485,6 +623,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
             btn.setStyleSheet(self.BUTTON_STYLE)
+
+        self._apply_dimension_button_labels()
             
         for spin in self.widgets['spins']['slice_indices']:
             spin.setStyleSheet(self.SPINBOX_STYLE)
@@ -566,7 +706,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             btn.setStyleSheet(self.RADIO_BUTTON_STYLE)
             self.channel_button_group.addButton(btn)
             channel_layout.addWidget(btn)
-            btn.clicked.connect(self.update)
+            btn.clicked.connect(self._on_channel_changed)
         
         channel_group.setLayout(channel_layout)
         controls_layout.addWidget(channel_group)
@@ -605,7 +745,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Optional: tooltip hints
         self.widgets['buttons']['display']['square_pixels'].setToolTip('Lock to 1:1 pixel aspect')
         self.widgets['buttons']['display']['square_fov'].setToolTip('Lock aspect to image width/height ratio')
-        self.widgets['buttons']['display']['fit'].setToolTip('Always fit entire image in viewport')
+        self.widgets['buttons']['display']['auto'].setToolTip(
+            'Use voxel spacing aspect when available; otherwise fit entire image in viewport'
+        )
         
         self.display_group.setLayout(display_layout)
         controls_layout.addWidget(self.display_group)
@@ -628,7 +770,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.image_tab.setLayout(self.image_tab_layout)
         self.img_view.getView().scene().sigMouseMoved.connect(lambda pos: self.getPixel(pos))
         
-        # Connect to view range changes to update aspect ratio in fit mode
+        # Connect to view range changes to update aspect ratio in auto-fit mode
         self.img_view.getView().sigRangeChanged.connect(self._on_view_range_changed)
         
         # Create line plot tab
@@ -728,6 +870,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.line_min_pen = 2.0
         self.line_max_pen = 6.0
         self.line_color = (50, 100, 200)
+        self._line_tab_hovered = False
+        self._line_slice_preview_orientation = None
+        self._line_slice_preview_outline = None
+        self._line_slice_preview_fill = None
+        self._line_slice_preview_fixed_dim = None
+        self._create_line_slice_preview_items()
         # Listen to range changes to adapt thickness
         self.plot_widget.getViewBox().sigRangeChanged.connect(self._on_plot_range_changed)
         
@@ -745,6 +893,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Connect tab change handler
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
         
+        self.tab_widget.tabBar().setMouseTracking(True)
         self.tab_widget.tabBar().installEventFilter(self)
         
         # Add tab widget to the main layout
@@ -762,6 +911,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.layouts['topUp'].addWidget(self._reload_btn)
         self.layouts['topUp'].addWidget(self.widgets['labels']['pixelValue'])
         self.layouts['topUp'].addWidget(self.widgets['labels']['arrayInfo'])
+        self.layouts['topUp'].addStretch(1)
+
+        self._settings_btn = self._create_settings_button()
+        self.layouts['topUp'].addWidget(self._settings_btn)
 
         self.layouts['botLeft'].addLayout(self.layouts['dims'])
         
@@ -808,6 +961,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
+        self._apply_startup_indices()
+        self._apply_initial_origin()
+        self._apply_default_display_mode()
+        self._apply_default_channel()
+        self._apply_effective_colormap()
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
@@ -822,7 +980,423 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
 
 
-    
+
+    def _create_settings_button(self):
+        button = QtWidgets.QToolButton(self)
+        button.setText("⚙")
+        button.setToolTip("Settings")
+        button.setAutoRaise(True)
+        button.setFixedSize(28, 24)
+        button.setStyleSheet("QToolButton { font-size: 15pt; padding: 0px; margin: 0px; }")
+        self._set_emoji_font(button)
+
+        try:
+            button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        except AttributeError:
+            button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+
+        menu = QtWidgets.QMenu(button)
+        self._settings_menu = menu
+
+        initial_index_row = QtWidgets.QWidget(menu)
+        initial_index_layout = QtWidgets.QHBoxLayout()
+        initial_index_layout.setContentsMargins(8, 4, 8, 4)
+        initial_index_layout.setSpacing(8)
+
+        initial_index_label = QtWidgets.QLabel("Default slice position")
+        self._initial_index_combo = QtWidgets.QComboBox(initial_index_row)
+        for initial_index in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
+            self._initial_index_combo.addItem(
+                self.INITIAL_INDEX_LABELS.get(initial_index, initial_index),
+                initial_index,
+            )
+
+        initial_index = self._initial_index_combo.findData(
+            self._viewer_config.initial_index
+        )
+        if initial_index < 0:
+            initial_index = self._initial_index_combo.findData(INITIAL_INDEX_FIRST)
+        self._initial_index_combo.setCurrentIndex(max(0, initial_index))
+        self._initial_index_combo.currentIndexChanged.connect(
+            self._on_initial_index_changed
+        )
+
+        initial_index_layout.addWidget(initial_index_label)
+        initial_index_layout.addWidget(self._initial_index_combo)
+        initial_index_row.setLayout(initial_index_layout)
+
+        initial_index_action = QtWidgets.QWidgetAction(menu)
+        initial_index_action.setDefaultWidget(initial_index_row)
+        menu.addAction(initial_index_action)
+
+        default_slice_row = QtWidgets.QWidget(menu)
+        default_slice_layout = QtWidgets.QHBoxLayout()
+        default_slice_layout.setContentsMargins(8, 4, 8, 4)
+        default_slice_layout.setSpacing(8)
+
+        default_slice_label = QtWidgets.QLabel("Default displayed axes")
+        self._default_slice_combo = QtWidgets.QComboBox(default_slice_row)
+        for default_slice in (DEFAULT_SLICE_FIRST, DEFAULT_SLICE_LAST):
+            self._default_slice_combo.addItem(
+                self.DEFAULT_SLICE_LABELS.get(default_slice, default_slice),
+                default_slice,
+            )
+
+        default_slice_index = self._default_slice_combo.findData(
+            self._viewer_config.default_slice
+        )
+        if default_slice_index < 0:
+            default_slice_index = self._default_slice_combo.findData(DEFAULT_SLICE_FIRST)
+        self._default_slice_combo.setCurrentIndex(max(0, default_slice_index))
+        self._default_slice_combo.currentIndexChanged.connect(
+            self._on_default_slice_changed
+        )
+
+        default_slice_layout.addWidget(default_slice_label)
+        default_slice_layout.addWidget(self._default_slice_combo)
+        default_slice_row.setLayout(default_slice_layout)
+
+        default_slice_action = QtWidgets.QWidgetAction(menu)
+        default_slice_action.setDefaultWidget(default_slice_row)
+        menu.addAction(default_slice_action)
+
+        origin_row = QtWidgets.QWidget(menu)
+        origin_layout = QtWidgets.QHBoxLayout()
+        origin_layout.setContentsMargins(8, 4, 8, 4)
+        origin_layout.setSpacing(8)
+
+        origin_label = QtWidgets.QLabel("Default origin")
+        self._origin_combo = QtWidgets.QComboBox(origin_row)
+        for origin in SUPPORTED_ORIGINS:
+            self._origin_combo.addItem(
+                self.ORIGIN_LABELS.get(origin, origin),
+                origin,
+            )
+
+        origin_index = self._origin_combo.findData(self._viewer_config.initial_origin)
+        if origin_index < 0:
+            origin_index = self._origin_combo.findData(DEFAULT_ORIGIN)
+        self._origin_combo.setCurrentIndex(max(0, origin_index))
+        self._origin_combo.currentIndexChanged.connect(self._on_initial_origin_changed)
+
+        origin_layout.addWidget(origin_label)
+        origin_layout.addWidget(self._origin_combo)
+        origin_row.setLayout(origin_layout)
+
+        origin_action = QtWidgets.QWidgetAction(menu)
+        origin_action.setDefaultWidget(origin_row)
+        menu.addAction(origin_action)
+
+        menu.addSeparator()
+
+        channel_row = QtWidgets.QWidget(menu)
+        channel_layout = QtWidgets.QHBoxLayout()
+        channel_layout.setContentsMargins(8, 4, 8, 4)
+        channel_layout.setSpacing(8)
+
+        channel_label = QtWidgets.QLabel("Default channel")
+        self._channel_combo = QtWidgets.QComboBox(channel_row)
+        for channel in SUPPORTED_CHANNELS:
+            self._channel_combo.addItem(
+                self.CHANNEL_LABELS.get(channel, channel),
+                channel,
+            )
+
+        channel_index = self._channel_combo.findData(self._viewer_config.default_channel)
+        if channel_index < 0:
+            channel_index = self._channel_combo.findData(DEFAULT_CHANNEL)
+        self._channel_combo.setCurrentIndex(max(0, channel_index))
+        self._channel_combo.currentIndexChanged.connect(self._on_default_channel_changed)
+
+        channel_layout.addWidget(channel_label)
+        channel_layout.addWidget(self._channel_combo)
+        channel_row.setLayout(channel_layout)
+
+        channel_action = QtWidgets.QWidgetAction(menu)
+        channel_action.setDefaultWidget(channel_row)
+        menu.addAction(channel_action)
+
+        colormap_row = QtWidgets.QWidget(menu)
+        colormap_layout = QtWidgets.QHBoxLayout()
+        colormap_layout.setContentsMargins(8, 4, 8, 4)
+        colormap_layout.setSpacing(8)
+
+        colormap_label = QtWidgets.QLabel("Default colormap")
+        self._colormap_combo = QtWidgets.QComboBox(colormap_row)
+        self._colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        for colormap_name in COLORMAP_NAMES:
+            self._colormap_combo.addItem(self._colormap_icon(colormap_name), colormap_name)
+
+        index = self._colormap_combo.findText(self._viewer_config.default_colormap)
+        if index < 0:
+            index = self._colormap_combo.findText(DEFAULT_COLORMAP)
+        self._colormap_combo.setCurrentIndex(max(0, index))
+        self._colormap_combo.currentTextChanged.connect(self._on_default_colormap_changed)
+
+        colormap_layout.addWidget(colormap_label)
+        colormap_layout.addWidget(self._colormap_combo)
+        colormap_row.setLayout(colormap_layout)
+
+        colormap_action = QtWidgets.QWidgetAction(menu)
+        colormap_action.setDefaultWidget(colormap_row)
+        menu.addAction(colormap_action)
+
+        angle_colormap_row = QtWidgets.QWidget(menu)
+        angle_colormap_layout = QtWidgets.QHBoxLayout()
+        angle_colormap_layout.setContentsMargins(8, 4, 8, 4)
+        angle_colormap_layout.setSpacing(8)
+
+        angle_colormap_label = QtWidgets.QLabel("Angle colormap")
+        self._angle_colormap_combo = QtWidgets.QComboBox(angle_colormap_row)
+        self._angle_colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        self._angle_colormap_combo.addItem("Same", ANGLE_COLORMAP_SAME)
+        for colormap_name in COLORMAP_NAMES:
+            self._angle_colormap_combo.addItem(
+                self._colormap_icon(colormap_name),
+                colormap_name,
+                colormap_name,
+            )
+
+        angle_colormap_index = self._angle_colormap_combo.findData(
+            self._viewer_config.angle_colormap
+        )
+        if angle_colormap_index < 0:
+            angle_colormap_index = self._angle_colormap_combo.findData(ANGLE_COLORMAP_SAME)
+        self._angle_colormap_combo.setCurrentIndex(max(0, angle_colormap_index))
+        self._angle_colormap_combo.currentIndexChanged.connect(
+            self._on_angle_colormap_changed
+        )
+
+        angle_colormap_layout.addWidget(angle_colormap_label)
+        angle_colormap_layout.addWidget(self._angle_colormap_combo)
+        angle_colormap_row.setLayout(angle_colormap_layout)
+
+        angle_colormap_action = QtWidgets.QWidgetAction(menu)
+        angle_colormap_action.setDefaultWidget(angle_colormap_row)
+        menu.addAction(angle_colormap_action)
+
+        display_row = QtWidgets.QWidget(menu)
+        display_layout = QtWidgets.QHBoxLayout()
+        display_layout.setContentsMargins(8, 4, 8, 4)
+        display_layout.setSpacing(8)
+
+        display_label = QtWidgets.QLabel("Default aspect ratio")
+        self._display_mode_combo = QtWidgets.QComboBox(display_row)
+        for display_mode in SUPPORTED_DISPLAY_MODES:
+            self._display_mode_combo.addItem(
+                self.DISPLAY_MODE_LABELS.get(display_mode, display_mode),
+                display_mode,
+            )
+
+        display_index = self._display_mode_combo.findData(
+            self._viewer_config.default_display_mode
+        )
+        if display_index < 0:
+            display_index = self._display_mode_combo.findData(DEFAULT_DISPLAY_MODE)
+        self._display_mode_combo.setCurrentIndex(max(0, display_index))
+        self._display_mode_combo.currentIndexChanged.connect(
+            self._on_default_display_mode_changed
+        )
+
+        display_layout.addWidget(display_label)
+        display_layout.addWidget(self._display_mode_combo)
+        display_row.setLayout(display_layout)
+
+        display_action = QtWidgets.QWidgetAction(menu)
+        display_action.setDefaultWidget(display_row)
+        menu.addAction(display_action)
+
+        button.setMenu(menu)
+        return button
+
+    def _apply_startup_indices(self):
+        initial_index = self._viewer_config.initial_index
+
+        for dim, spinbox in enumerate(self.widgets['spins']['slice_indices']):
+            if initial_index == INITIAL_INDEX_CENTER:
+                spinbox.setValue((self.data.shape[dim] - 1) // 2)
+            elif initial_index == INITIAL_INDEX_LAST:
+                spinbox.setValue(self.data.shape[dim] - 1)
+            else:
+                spinbox.setValue(0)
+
+    def _apply_initial_origin(self):
+        self._set_origin(self._viewer_config.initial_origin)
+
+    def _set_origin(self, origin):
+        if origin not in SUPPORTED_ORIGINS:
+            origin = DEFAULT_ORIGIN
+
+        flip_y = origin.startswith("upper")
+        flip_x = origin.endswith("right")
+
+        if self.is_line_plot_mode():
+            self.axis_flipped[self.line_plot_dimension] = flip_x
+        elif len(self.selected_indices) >= 1:
+            self.axis_flipped[self.selected_indices[0]] = flip_y
+            if len(self.selected_indices) >= 2:
+                self.axis_flipped[self.selected_indices[1]] = flip_x
+
+        self.update_flip_icons()
+        self.apply_axis_flips()
+
+    def _apply_default_display_mode(self):
+        self._set_display_mode(self._viewer_config.default_display_mode)
+
+    def _set_display_mode(self, display_mode):
+        if display_mode == 'fit':
+            display_mode = 'auto'
+        if display_mode not in SUPPORTED_DISPLAY_MODES:
+            display_mode = DEFAULT_DISPLAY_MODE
+
+        button = self.widgets['buttons']['display'].get(display_mode)
+        if button is None:
+            return
+
+        button.setChecked(True)
+        self.update_display_mode()
+
+    def _apply_default_channel(self):
+        self._set_channel(self._viewer_config.default_channel)
+
+    def _set_channel(self, channel):
+        if channel == DEFAULT_CHANNEL:
+            self._update_channel_controls()
+            return
+
+        button = self.widgets['buttons']['channel'].get(channel)
+        if button is not None and button.isEnabled():
+            button.setChecked(True)
+        else:
+            self._update_channel_controls()
+
+    def _current_channel_name(self):
+        return next(
+            (
+                name
+                for name, button in self.widgets['buttons']['channel'].items()
+                if button.isChecked()
+            ),
+            None,
+        )
+
+    def _effective_colormap_name(self):
+        if (
+            self._current_channel_name() == "angle"
+            and self._viewer_config.angle_colormap != ANGLE_COLORMAP_SAME
+        ):
+            return self._viewer_config.angle_colormap
+        return self._viewer_config.default_colormap
+
+    def _apply_effective_colormap(self):
+        self.setColormap(self._effective_colormap_name())
+
+    def _on_channel_changed(self):
+        self._apply_effective_colormap()
+        self.update()
+
+    def _on_initial_index_changed(self, index):
+        initial_index = self._initial_index_combo.itemData(index)
+        if initial_index not in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
+            initial_index = INITIAL_INDEX_FIRST
+
+        self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
+        self._save_viewer_config()
+
+    def _on_default_slice_changed(self, index):
+        default_slice = self._default_slice_combo.itemData(index)
+        if default_slice not in VALID_DEFAULT_SLICE:
+            default_slice = DEFAULT_SLICE_FIRST
+
+        self._viewer_config = replace(self._viewer_config, default_slice=default_slice)
+        self._save_viewer_config()
+
+    def _on_initial_origin_changed(self, index):
+        origin = self._origin_combo.itemData(index)
+        if origin not in SUPPORTED_ORIGINS:
+            origin = DEFAULT_ORIGIN
+
+        self._viewer_config = replace(self._viewer_config, initial_origin=origin)
+        self._save_viewer_config()
+        self._set_origin(origin)
+
+    def _on_default_channel_changed(self, index):
+        channel = self._channel_combo.itemData(index)
+        if channel not in SUPPORTED_CHANNELS:
+            channel = DEFAULT_CHANNEL
+
+        self._viewer_config = replace(self._viewer_config, default_channel=channel)
+        self._save_viewer_config()
+        self._set_channel(channel)
+        self._apply_effective_colormap()
+        self.update()
+
+    def _on_default_colormap_changed(self, colormap_name):
+        if colormap_name not in COLORMAP_NAMES:
+            colormap_name = DEFAULT_COLORMAP
+
+        self._viewer_config = replace(self._viewer_config, default_colormap=colormap_name)
+        self._save_viewer_config()
+        self._apply_effective_colormap()
+
+    def _on_angle_colormap_changed(self, index):
+        colormap_name = self._angle_colormap_combo.itemData(index)
+        if colormap_name != ANGLE_COLORMAP_SAME and colormap_name not in COLORMAP_NAMES:
+            colormap_name = ANGLE_COLORMAP_SAME
+
+        self._viewer_config = replace(self._viewer_config, angle_colormap=colormap_name)
+        self._save_viewer_config()
+        self._apply_effective_colormap()
+
+    def _on_default_display_mode_changed(self, index):
+        display_mode = self._display_mode_combo.itemData(index)
+        if display_mode not in SUPPORTED_DISPLAY_MODES:
+            display_mode = DEFAULT_DISPLAY_MODE
+
+        self._viewer_config = replace(
+            self._viewer_config,
+            default_display_mode=display_mode,
+        )
+        self._save_viewer_config()
+        self._set_display_mode(display_mode)
+
+    def _save_viewer_config(self):
+        try:
+            save_config(
+                self._viewer_config,
+                self._config_path,
+                colormap_names=COLORMAP_NAMES,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Settings Error",
+                f"Failed to save settings:\n{e}",
+            )
+
+    def _colormap_icon(self, colormap_name):
+        pixmap = QtGui.QPixmap(96, 16)
+        pixmap.fill(Qt.QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+
+        try:
+            color_map = self._get_colormap(colormap_name)
+            lut = color_map.getLookupTable(0.0, 1.0, pixmap.width(), alpha=False)
+            for x, color in enumerate(lut):
+                painter.setPen(QtGui.QColor(int(color[0]), int(color[1]), int(color[2])))
+                painter.drawLine(x, 0, x, pixmap.height() - 1)
+        except Exception:
+            pixmap.fill(QtGui.QColor("black"))
+        finally:
+            painter.end()
+
+        border_painter = QtGui.QPainter(pixmap)
+        border_painter.setPen(QtGui.QColor(120, 120, 120))
+        border_painter.drawRect(0, 0, pixmap.width() - 1, pixmap.height() - 1)
+        border_painter.end()
+        return QtGui.QIcon(pixmap)
+
+
     def dimClicked(self, event, label, dim):
         if self.singleton[dim]:
             return
@@ -982,6 +1556,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             checked_channel = 'abs' if is_complex else 'real'
 
         channel_buttons[checked_channel].setChecked(True)
+
+        if hasattr(self, 'img_view'):
+            self._apply_effective_colormap()
     
     def complexOrRealClicked(self, event, dim):
         if self.can_combine_as_complex[dim] and not self.combined_as_complex[dim]:
@@ -1150,6 +1727,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             
             # Apply axis flips after setting the image
             self.apply_axis_flips()
+            self._update_line_slice_preview()
             
         except Exception as e:
             print(f'Image update failed: {e}')
@@ -1160,8 +1738,39 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.img_view.setDisplayMode('square_pixels')
         elif self.widgets['buttons']['display']['square_fov'].isChecked():
             self.img_view.setDisplayMode('square_fov')
-        elif self.widgets['buttons']['display']['fit'].isChecked():
-            self.img_view.setDisplayMode('fit')
+        elif self.widgets['buttons']['display']['auto'].isChecked():
+            self.img_view.setDisplayMode('auto', self._auto_display_aspect_ratio())
+        self._update_auto_display_label()
+        self._update_display_group_title()
+
+    def _auto_display_aspect_ratio(self):
+        if len(self.selected_indices) < 2:
+            return None
+
+        y_dim = self.selected_indices[0]
+        x_dim = self.selected_indices[1]
+        y_spacing = self.voxel_spacing[y_dim]
+        x_spacing = self.voxel_spacing[x_dim]
+        if x_spacing is None or y_spacing is None:
+            return None
+
+        return x_spacing / y_spacing
+
+    def _auto_display_is_fit(self):
+        return self._auto_display_aspect_ratio() is None
+
+    def _update_auto_display_label(self):
+        button = self.widgets['buttons']['display']['auto']
+        if not self._has_voxel_spacing_metadata:
+            button.setText('Fit')
+        else:
+            button.setText('Auto (fit)' if self._auto_display_is_fit() else 'Auto')
+
+    def _update_auto_display_aspect(self):
+        self.img_view.setAutoAspectRatio(self._auto_display_aspect_ratio())
+        self._update_auto_display_label()
+        if hasattr(self, 'display_group'):
+            self._update_display_group_title()
 
     def _processing_pressed(self, btn):
         """Called on processing button press; if the button is already checked
@@ -1189,10 +1798,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.display_group.setTitle('Display (1:1)')
             return
         
-        if mode == 'fit': #use the viewport aspect ratio
+        if mode == 'auto':
             aspect_str = ''
             try:
-                if hasattr(self.img_view, 'image') and self.img_view.image is not None:
+                auto_aspect_ratio = self._auto_display_aspect_ratio()
+                if auto_aspect_ratio is not None:
+                    ratio = auto_aspect_ratio
+                    if abs(ratio - 1.0) < 1e-2:
+                        aspect_str = '(1:1)'
+                    else:
+                        aspect_str = f'({ratio:.2f}:1)'
+                elif hasattr(self.img_view, 'image') and self.img_view.image is not None:
                     view = self.img_view.getView()
                     
                     img_height, img_width = self.img_view.image.shape
@@ -1301,11 +1917,126 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             else:
                 print(f'Warning: Expected 1D data but got {line_data.ndim}D data with shape {line_data.shape}')
             
-            self.plot_widget.setLabel('bottom', f'Index along dim {self.line_plot_dimension}')
+            self.plot_widget.setLabel('bottom', f'Index along {self._dimension_display_name(self.line_plot_dimension)}')
             
         except Exception as e:
             print(f'Line plot update failed: {e}')
             self.current_line_data = None
+
+    def _create_line_slice_preview_items(self):
+        self._line_slice_preview_items = {}
+        view = self.img_view.getView()
+        color = self.line_color
+
+        for orientation in ('vertical', 'horizontal'):
+            outline = pg.LinearRegionItem(
+                values=(0, 1),
+                orientation=orientation,
+                brush=pg.mkBrush(255, 255, 255, 120),
+                pen=pg.mkPen(255, 255, 255, 220, width=2),
+                movable=False,
+            )
+            fill = pg.LinearRegionItem(
+                values=(0, 1),
+                orientation=orientation,
+                brush=pg.mkBrush(color[0], color[1], color[2], 110),
+                pen=pg.mkPen(color[0], color[1], color[2], 230, width=1),
+                movable=False,
+            )
+
+            outline.setZValue(20)
+            fill.setZValue(21)
+            outline.setVisible(False)
+            fill.setVisible(False)
+            view.addItem(outline)
+            view.addItem(fill)
+            self._line_slice_preview_items[orientation] = (outline, fill)
+
+    def _hide_line_slice_preview(self):
+        if not hasattr(self, '_line_slice_preview_items'):
+            return
+        for outline, fill in self._line_slice_preview_items.values():
+            outline.setVisible(False)
+            fill.setVisible(False)
+        self._line_slice_preview_orientation = None
+        self._line_slice_preview_fixed_dim = None
+
+    def _set_line_tab_hovered(self, hovered):
+        self._line_tab_hovered = bool(hovered)
+        if self._line_tab_hovered:
+            self._update_line_slice_preview()
+        else:
+            self._hide_line_slice_preview()
+
+    def _update_line_slice_preview(self):
+        if (
+            not getattr(self, '_line_tab_hovered', False)
+            or self.data.ndim == 1
+            or len(self.selected_indices) < 2
+            or self.line_plot_dimension not in self.selected_indices[:2]
+        ):
+            self._hide_line_slice_preview()
+            return
+
+        if self.line_plot_dimension == self.selected_indices[1]:
+            orientation = 'horizontal'
+            fixed_dim = self.selected_indices[0]
+        else:
+            orientation = 'vertical'
+            fixed_dim = self.selected_indices[1]
+
+        idx = self.widgets['spins']['slice_indices'][fixed_dim].value()
+        region = (idx - 0.5, idx + 0.5)
+        outline_region = (idx - 0.6, idx + 0.6)
+
+        for item_orientation, (outline, fill) in self._line_slice_preview_items.items():
+            visible = item_orientation == orientation
+            outline.setVisible(visible)
+            fill.setVisible(visible)
+            if visible:
+                outline.setRegion(outline_region)
+                fill.setRegion(region)
+
+        self._line_slice_preview_orientation = orientation
+        self._line_slice_preview_fixed_dim = fixed_dim
+
+    def _line_slice_preview_is_visible(self):
+        if not hasattr(self, '_line_slice_preview_items'):
+            return False
+        return any(fill.isVisible() for _outline, fill in self._line_slice_preview_items.values())
+
+    def _step_line_slice_preview(self, steps):
+        fixed_dim = getattr(self, '_line_slice_preview_fixed_dim', None)
+        if fixed_dim is None or steps == 0:
+            return False
+
+        spinbox = self.widgets['spins']['slice_indices'][fixed_dim]
+        value = spinbox.value()
+        new_value = max(spinbox.minimum(), min(spinbox.maximum(), value + steps))
+        if new_value == value:
+            return True
+
+        spinbox.setValue(new_value)
+        self._update_line_slice_preview()
+        return True
+
+    def _wheel_steps(self, event):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            delta = event.angleDelta().x()
+        if delta == 0 and hasattr(event, 'pixelDelta'):
+            delta = event.pixelDelta().y()
+        if delta == 0:
+            return 0
+        multiplier = 10 if event.modifiers() & Qt.QtCore.Qt.KeyboardModifier.AltModifier else 1
+        return multiplier if delta > 0 else -multiplier
+
+    def _event_pos(self, event):
+        if hasattr(event, 'pos'):
+            return event.pos()
+        if hasattr(event, 'position'):
+            return event.position().toPoint()
+        return Qt.QtCore.QPoint()
 
     def _on_plot_range_changed(self, vb, ranges):
         """Adapt line pen thickness based on horizontal zoom.
@@ -1336,7 +2067,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             print(f"Thickness update failed: {e}")
 
     def _on_view_range_changed(self):
-        """Update display group title when view range changes (for fit mode)."""
+        """Update display group title when view range changes."""
         self._update_display_group_title()
 
     def _on_plot_hover(self, pos):
@@ -1379,6 +2110,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def on_tab_changed(self, index):
         """Handle tab change between Image View and Line Plot"""
+        self._set_line_tab_hovered(False)
         self.update_dimension_controls()
         self.update()
         # Hide crosshair if leaving line plot
@@ -1490,6 +2222,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
         
         self.update_flip_icons()
+        if hasattr(self, 'img_view'):
+            self._update_auto_display_aspect()
+        if hasattr(self, '_line_slice_preview_items'):
+            self._update_line_slice_preview()
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
@@ -1505,72 +2241,50 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Check CTRL+number for colormap changes
         if modifiers == Qt.QtCore.Qt.KeyboardModifier.ControlModifier:
-            if key == Qt.QtCore.Qt.Key.Key_1:
-                self.setColormap('gray')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_2:
-                self.setColormap('viridis')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_3:
-                self.setColormap('plasma')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_4:
-                self.setColormap('PAL-relaxed')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_5:
-                self.setColormap('cividis')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_6:
-                self.setColormap('CET-CBL1')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_7:
-                self.setColormap('d3-cool')
-                event.accept()
-                return
-            elif key == Qt.QtCore.Qt.Key.Key_8:
-                self.setColormap('d3-warm')
+            shortcut_keys = (
+                Qt.QtCore.Qt.Key.Key_1,
+                Qt.QtCore.Qt.Key.Key_2,
+                Qt.QtCore.Qt.Key.Key_3,
+                Qt.QtCore.Qt.Key.Key_4,
+                Qt.QtCore.Qt.Key.Key_5,
+                Qt.QtCore.Qt.Key.Key_6,
+                Qt.QtCore.Qt.Key.Key_7,
+                Qt.QtCore.Qt.Key.Key_8,
+            )
+            shortcut_map = dict(zip(shortcut_keys, COLORMAP_NAMES))
+            if key in shortcut_map:
+                self.setColormap(shortcut_map[key])
                 event.accept()
                 return
                 
         # Pass event to parent if not handled
         super().keyPressEvent(event)
     
+    def _get_colormap(self, colormap_name):
+        custom_colormaps = {
+            'gray': self._create_gray_colormap,
+            'd3-warm': self._create_d3_warm_colormap,
+            'd3-cool': self._create_d3_cool_colormap,
+        }
+        if colormap_name in custom_colormaps:
+            return custom_colormaps[colormap_name]()
+
+        if colormap_name in COLORMAP_NAMES:
+            return pg.colormap.get(colormap_name)
+
+        raise ValueError(f"Unknown colormap: {colormap_name}")
+
     def setColormap(self, colormap_name):
-        """Set the colormap for the image view"""
+        """Set the colormap for the image view."""
         try:
-            if colormap_name == 'gray':
-                colormap = self._create_gray_colormap()
-            elif colormap_name == 'viridis':
-                colormap = pg.colormap.get('viridis')
-            elif colormap_name == 'PAL-relaxed':
-                colormap = pg.colormap.get('PAL-relaxed')
-            elif colormap_name == 'plasma':
-                colormap = pg.colormap.get('plasma')
-            elif colormap_name == 'd3-warm':
-                colormap = self._create_d3_warm_colormap()
-            elif colormap_name == 'd3-cool':
-                colormap = self._create_d3_cool_colormap()
-            elif colormap_name == 'CET-CBL1':
-                colormap = pg.colormap.get('CET-CBL1')
-            elif colormap_name == 'cividis':
-                colormap = pg.colormap.get('cividis')
-            else:
-                print(f"Unknown colormap: {colormap_name}")
-                return
-            
+            colormap = self._get_colormap(colormap_name)
+
             if colormap is None:
                 print(f"Failed to load colormap '{colormap_name}': returned None")
                 return
             
-            # Apply colormap to the image view
             self.img_view.setColorMap(colormap)
-            #self.current_colormap = colormap_name
+            self.current_colormap = colormap_name
             
         except Exception as e:
             print(f"Failed to set colormap {colormap_name}: {e}")
@@ -1666,10 +2380,23 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def eventFilter(self, obj, event):
         if obj == self.tab_widget.tabBar():
+            if event.type() == Qt.QtCore.QEvent.Type.MouseMove:
+                tab_bar = self.tab_widget.tabBar()
+                self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
+            elif event.type() == Qt.QtCore.QEvent.Type.Leave:
+                self._set_line_tab_hovered(False)
+            elif event.type() == Qt.QtCore.QEvent.Type.Wheel:
+                tab_bar = self.tab_widget.tabBar()
+                self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
+                if self._line_slice_preview_is_visible():
+                    if self._step_line_slice_preview(self._wheel_steps(event)):
+                        event.accept()
+                        return True
+
             if event.type() == Qt.QtCore.QEvent.Type.MouseButtonDblClick:
                 # which tab was double-clicked
                 tab_bar = self.tab_widget.tabBar()
-                clicked_index = tab_bar.tabAt(event.pos())
+                clicked_index = tab_bar.tabAt(self._event_pos(event))
                 
                 # Check if line/bar tab (index 1)
                 if clicked_index == 1:
@@ -1733,6 +2460,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             )
             if not file_path:
                 return
+            if not Path(file_path).suffix:
+                file_path += f".{settings['format']}"
         
         # Determine transpose flag to match on-screen orientation (same condition as update_image_view)
         transpose = True if len(self.selected_indices) >= 2 and self.selected_indices[0] > self.selected_indices[1] else False
@@ -1850,14 +2579,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         try:
             new_data = None
             new_dataset_path = self._dataset_path
+            new_dim_labels = self.dim_labels
+            new_voxel_spacing = self.voxel_spacing
 
             if self._selector_class_name is None:
                 from .file_interpreters import load_file
                 new_data = load_file(self._filepath)
             else:
-                from .selectors import H5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
+                from .selectors import H5DatasetSelector, RieslingH5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
                 selector_map = {
                     'H5DatasetSelector': H5DatasetSelector,
+                    'RieslingH5DatasetSelector': RieslingH5DatasetSelector,
                     'NpzDatasetSelector': NpzDatasetSelector,
                     'MatDatasetSelector': MatDatasetSelector,
                 }
@@ -1868,6 +2600,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 compatible_keys = {d[0] for d in selector.compatible_datasets}
                 if self._dataset_path is not None and self._dataset_path in compatible_keys:
                     new_data = selector.load_data(self._dataset_path)
+                    labels = selector.dim_labels_for_path(self._dataset_path, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(self._dataset_path, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
                     selector.close()
                 elif selector.requires_gui():
                     selected = selector.show()
@@ -1875,20 +2613,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                         selector.close()
                         return  # User cancelled — keep ⚠️ visible
                     new_data = selector.load_data(selected)
+                    labels = selector.dim_labels_for_path(selected, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(selected, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
                     new_dataset_path = selected
                     selector.close()
                 else:
                     result = selector.get_single_data()
-                    selector.close()
                     if result is None:
+                        selector.close()
                         return
                     new_dataset_path, new_data = result
+                    labels = selector.dim_labels_for_path(new_dataset_path, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(new_dataset_path, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
+                    selector.close()
 
             if new_data is None:
                 return
 
             self._dataset_path = new_dataset_path
-            self._reset_data(new_data)
+            self._reset_data(new_data, dim_labels=new_dim_labels, voxel_spacing=new_voxel_spacing)
             self._reload_btn.setText("⟳")
             self._reload_btn.setToolTip("Reload file")
             if self._file_watcher and self._filepath:
@@ -1896,7 +2647,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Reload Error", f"Failed to reload:\n{e}")
 
-    def _reset_data(self, new_data):
+    def _reset_data(self, new_data, dim_labels=None, voxel_spacing=None):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
@@ -1907,13 +2658,24 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             win = NDSliceWindow(new_data,
                                 filepath=self._filepath,
                                 dataset_path=self._dataset_path,
-                                selector_class_name=self._selector_class_name)
+                                selector_class_name=self._selector_class_name,
+                                config_path=self._config_path,
+                                dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
+                                voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
+        self._has_voxel_spacing_metadata = voxel_spacing is not None or self._has_voxel_spacing_metadata
+        self.voxel_spacing = self._clean_voxel_spacing(
+            voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
+            new_ndim,
+        )
+        if dim_labels is not None:
+            self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
+            self._apply_dimension_button_labels()
         self.singleton = [e == 1 for e in new_data.shape]
 
         if np.iscomplexobj(new_data):
@@ -1959,6 +2721,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
+        self._apply_initial_origin()
         self.update_dimension_controls()
         self._force_autolevel = True
         self.update()
@@ -2031,7 +2794,8 @@ def _retain_window_reference(app, win):
     win.destroyed.connect(_release_reference)
 
 def _create_window(data, title='', complex_dim=None, filepath=None,
-                   dataset_path=None, selector_class_name=None):
+                   dataset_path=None, selector_class_name=None, dim_labels=None,
+                   voxel_spacing=None):
     _prepare_qt_environment()
 
     app = pg.mkQApp()
@@ -2039,20 +2803,25 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
 
     win = NDSliceWindow(data, complex_dim=complex_dim, filepath=filepath,
                         dataset_path=dataset_path,
-                        selector_class_name=selector_class_name)
+                        selector_class_name=selector_class_name,
+                        dim_labels=dim_labels,
+                        voxel_spacing=voxel_spacing)
     win.setWindowTitle(title)
     win.show()
 
     return app, win
 
 def _run_window(data, title='', complex_dim=None, filepath=None,
-                dataset_path=None, selector_class_name=None):
+                dataset_path=None, selector_class_name=None, dim_labels=None,
+                voxel_spacing=None):
     """Open a viewer window in this process and block on the Qt event loop."""
     try:
         app, win = _create_window(
             data, title=title, complex_dim=complex_dim,
             filepath=filepath, dataset_path=dataset_path,
             selector_class_name=selector_class_name,
+            dim_labels=dim_labels,
+            voxel_spacing=voxel_spacing,
         )
         return app.exec()
     except BaseException:
@@ -2061,12 +2830,15 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
         raise
 
 def _show_window_inline(data, title='', complex_dim=None, filepath=None,
-                        dataset_path=None, selector_class_name=None):
+                        dataset_path=None, selector_class_name=None, dim_labels=None,
+                        voxel_spacing=None):
     """Open a viewer window in this process without starting app.exec()."""
     app, win = _create_window(
         data, title=title, complex_dim=complex_dim,
         filepath=filepath, dataset_path=dataset_path,
         selector_class_name=selector_class_name,
+        dim_labels=dim_labels,
+        voxel_spacing=voxel_spacing,
     )
 
     _retain_window_reference(app, win)
@@ -2074,7 +2846,8 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
     return win
 
 def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
-            dataset_path=None, selector_class_name=None):
+            dataset_path=None, selector_class_name=None, dim_labels=None,
+            voxel_spacing=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
@@ -2084,6 +2857,8 @@ def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
         "filepath": filepath,
         "dataset_path": dataset_path,
         "selector_class_name": selector_class_name,
+        "dim_labels": dim_labels,
+        "voxel_spacing": voxel_spacing,
     }
 
     if block:

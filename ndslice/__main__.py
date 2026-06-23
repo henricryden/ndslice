@@ -6,7 +6,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from .ndslice import ndslice
-from .selectors import H5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
+from .selectors import h5_selector_for_path, NpzDatasetSelector, MatDatasetSelector
 from .file_interpreters import load_path
 
 
@@ -50,13 +50,15 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
                 detected_format = loaded.metadata.get('detected_format')
                 if detected_format:
                     title = f"{title} [{detected_format}]"
-                ndslice(data=loaded.data, title=title, block=False, filepath=filepath)
+                ndslice(data=loaded.data, title=title, block=False, filepath=filepath,
+                        dim_labels=loaded.metadata.get('dim_labels'),
+                        voxel_spacing=loaded.metadata.get('voxel_spacing'))
                 continue
             
             # Multi-dataset formats - use selectors
             selector = None
             if suffix in ['.h5', '.hdf5']:
-                selector = H5DatasetSelector(filepath)
+                selector = h5_selector_for_path(filepath)
             elif suffix == '.npz':
                 selector = NpzDatasetSelector(filepath)
             elif suffix == '.mat':
