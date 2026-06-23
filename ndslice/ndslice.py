@@ -2291,6 +2291,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             )
             if not file_path:
                 return
+            if not Path(file_path).suffix:
+                file_path += f".{settings['format']}"
         
         # Determine transpose flag to match on-screen orientation (same condition as update_image_view)
         transpose = True if len(self.selected_indices) >= 2 and self.selected_indices[0] > self.selected_indices[1] else False
