@@ -14,6 +14,9 @@ INITIAL_INDEX_FIRST = "first"
 INITIAL_INDEX_CENTER = "center"
 INITIAL_INDEX_LAST = "last"
 VALID_INITIAL_INDEX = {INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST}
+DEFAULT_SLICE_FIRST = "first"
+DEFAULT_SLICE_LAST = "last"
+VALID_DEFAULT_SLICE = {DEFAULT_SLICE_FIRST, DEFAULT_SLICE_LAST}
 
 DEFAULT_COLORMAP = "gray"
 ANGLE_COLORMAP_SAME = "same"
@@ -46,6 +49,7 @@ DISPLAY_MODE_ALIASES = {
 @dataclass(frozen=True)
 class ViewerConfig:
     initial_index: str = INITIAL_INDEX_FIRST
+    default_slice: str = DEFAULT_SLICE_FIRST
     initial_origin: str = DEFAULT_ORIGIN
     default_channel: str = DEFAULT_CHANNEL
     default_colormap: str = DEFAULT_COLORMAP
@@ -79,6 +83,10 @@ def load_config(path=None, colormap_names=None):
     if initial_index not in VALID_INITIAL_INDEX:
         initial_index = INITIAL_INDEX_FIRST
 
+    default_slice = startup.get("default_slice", DEFAULT_SLICE_FIRST)
+    if default_slice not in VALID_DEFAULT_SLICE:
+        default_slice = DEFAULT_SLICE_FIRST
+
     initial_origin = startup.get("initial_origin", DEFAULT_ORIGIN)
     if initial_origin not in SUPPORTED_ORIGINS:
         initial_origin = DEFAULT_ORIGIN
@@ -107,6 +115,7 @@ def load_config(path=None, colormap_names=None):
 
     return ViewerConfig(
         initial_index=initial_index,
+        default_slice=default_slice,
         initial_origin=initial_origin,
         default_channel=default_channel,
         default_colormap=default_colormap,
@@ -124,6 +133,10 @@ def save_config(config, path=None, colormap_names=None):
     initial_index = config.initial_index
     if initial_index not in VALID_INITIAL_INDEX:
         initial_index = INITIAL_INDEX_FIRST
+
+    default_slice = config.default_slice
+    if default_slice not in VALID_DEFAULT_SLICE:
+        default_slice = DEFAULT_SLICE_FIRST
 
     initial_origin = config.initial_origin
     if initial_origin not in SUPPORTED_ORIGINS:
@@ -154,6 +167,7 @@ def save_config(config, path=None, colormap_names=None):
     text = (
         "[startup]\n"
         f'initial_index = "{initial_index}"\n'
+        f'default_slice = "{default_slice}"\n'
         f'initial_origin = "{initial_origin}"\n'
         "\n"
         "[display]\n"

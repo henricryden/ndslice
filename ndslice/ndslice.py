@@ -16,12 +16,15 @@ from .config import (
     DEFAULT_COLORMAP, 
     DEFAULT_DISPLAY_MODE, 
     DEFAULT_ORIGIN,
+    DEFAULT_SLICE_FIRST,
+    DEFAULT_SLICE_LAST,
     INITIAL_INDEX_CENTER, 
     INITIAL_INDEX_FIRST, 
     INITIAL_INDEX_LAST, 
     SUPPORTED_CHANNELS,
     SUPPORTED_DISPLAY_MODES, 
     SUPPORTED_ORIGINS,
+    VALID_DEFAULT_SLICE,
     load_config, 
     save_config, 
 )
@@ -361,11 +364,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     DISPLAY_MODE_LABELS = {
         "square_pixels": "Square pixels",
         "square_fov": "Square FOV",
-        "auto": "Auto",
+        "auto": "Auto/Fit",
     }
     INITIAL_INDEX_LABELS = {
         "first": "First",
         "center": "Center",
+        "last": "Last",
+    }
+    DEFAULT_SLICE_LABELS = {
+        "first": "First",
         "last": "Last",
     }
     ORIGIN_LABELS = {
@@ -440,6 +447,28 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.widgets['buttons']['primary'][i].setToolTip(tooltip)
             self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
 
+    @staticmethod
+    def _initial_selected_indices(shape, default_slice):
+        valid_dims = [dim for dim, size in enumerate(shape) if size != 1]
+        if not valid_dims:
+            return [0]
+
+        if default_slice == DEFAULT_SLICE_LAST:
+            selected = valid_dims[-2:]
+        else:
+            selected = valid_dims[:2]
+
+        if len(selected) < 2 and len(shape) >= 2:
+            fallback_dims = range(len(shape) - 1, -1, -1) if default_slice == DEFAULT_SLICE_LAST else range(len(shape))
+            for dim in fallback_dims:
+                if dim not in selected:
+                    selected.append(dim)
+                if len(selected) >= 2:
+                    break
+            selected = sorted(selected)
+
+        return selected
+
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
                  selector_class_name=None, config_path=None, dim_labels=None,
                  voxel_spacing=None):
@@ -448,6 +477,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         self.data = data
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
+        self._has_voxel_spacing_metadata = voxel_spacing is not None
         self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
         # if voxel_spacing is not None:
         #     print("Assumed voxel spacing:")
@@ -477,16 +507,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         # Store complex_dim for later use (after widgets are created)
         self._initial_complex_dim = complex_dim
-        
-        for dim in range(0,data.ndim):
-            if self.singleton[dim] is False and len(self.selected_indices) < 2:
-                self.selected_indices.append(dim)
-        # For 1D arrays, we only need one dimension; for 2D+, ensure we have two
-        if len(self.selected_indices) < 2 and data.ndim >= 2:
-            self.selected_indices = [0, 1]
-        elif len(self.selected_indices) == 0:
-            # Edge case: if all dimensions are singleton, pick first one
-            self.selected_indices = [0]
+
+        self.selected_indices = self._initial_selected_indices(
+            data.shape,
+            self._viewer_config.default_slice,
+        )
         
         # Line plot mode uses a single selected dimension
         self.line_plot_dimension = 0  # Default to first non-singleton dimension
@@ -978,7 +1003,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         initial_index_layout.setContentsMargins(8, 4, 8, 4)
         initial_index_layout.setSpacing(8)
 
-        initial_index_label = QtWidgets.QLabel("Initial indices")
+        initial_index_label = QtWidgets.QLabel("Default slice position")
         self._initial_index_combo = QtWidgets.QComboBox(initial_index_row)
         for initial_index in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
             self._initial_index_combo.addItem(
@@ -1004,12 +1029,43 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         initial_index_action.setDefaultWidget(initial_index_row)
         menu.addAction(initial_index_action)
 
+        default_slice_row = QtWidgets.QWidget(menu)
+        default_slice_layout = QtWidgets.QHBoxLayout()
+        default_slice_layout.setContentsMargins(8, 4, 8, 4)
+        default_slice_layout.setSpacing(8)
+
+        default_slice_label = QtWidgets.QLabel("Default displayed axes")
+        self._default_slice_combo = QtWidgets.QComboBox(default_slice_row)
+        for default_slice in (DEFAULT_SLICE_FIRST, DEFAULT_SLICE_LAST):
+            self._default_slice_combo.addItem(
+                self.DEFAULT_SLICE_LABELS.get(default_slice, default_slice),
+                default_slice,
+            )
+
+        default_slice_index = self._default_slice_combo.findData(
+            self._viewer_config.default_slice
+        )
+        if default_slice_index < 0:
+            default_slice_index = self._default_slice_combo.findData(DEFAULT_SLICE_FIRST)
+        self._default_slice_combo.setCurrentIndex(max(0, default_slice_index))
+        self._default_slice_combo.currentIndexChanged.connect(
+            self._on_default_slice_changed
+        )
+
+        default_slice_layout.addWidget(default_slice_label)
+        default_slice_layout.addWidget(self._default_slice_combo)
+        default_slice_row.setLayout(default_slice_layout)
+
+        default_slice_action = QtWidgets.QWidgetAction(menu)
+        default_slice_action.setDefaultWidget(default_slice_row)
+        menu.addAction(default_slice_action)
+
         origin_row = QtWidgets.QWidget(menu)
         origin_layout = QtWidgets.QHBoxLayout()
         origin_layout.setContentsMargins(8, 4, 8, 4)
         origin_layout.setSpacing(8)
 
-        origin_label = QtWidgets.QLabel("Initial origin")
+        origin_label = QtWidgets.QLabel("Default origin")
         self._origin_combo = QtWidgets.QComboBox(origin_row)
         for origin in SUPPORTED_ORIGINS:
             self._origin_combo.addItem(
@@ -1124,7 +1180,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         display_layout.setContentsMargins(8, 4, 8, 4)
         display_layout.setSpacing(8)
 
-        display_label = QtWidgets.QLabel("Default display")
+        display_label = QtWidgets.QLabel("Default aspect ratio")
         self._display_mode_combo = QtWidgets.QComboBox(display_row)
         for display_mode in SUPPORTED_DISPLAY_MODES:
             self._display_mode_combo.addItem(
@@ -1245,6 +1301,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             initial_index = INITIAL_INDEX_FIRST
 
         self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
+        self._save_viewer_config()
+
+    def _on_default_slice_changed(self, index):
+        default_slice = self._default_slice_combo.itemData(index)
+        if default_slice not in VALID_DEFAULT_SLICE:
+            default_slice = DEFAULT_SLICE_FIRST
+
+        self._viewer_config = replace(self._viewer_config, default_slice=default_slice)
         self._save_viewer_config()
 
     def _on_initial_origin_changed(self, index):
@@ -1697,7 +1761,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _update_auto_display_label(self):
         button = self.widgets['buttons']['display']['auto']
-        button.setText('Auto (fit)' if self._auto_display_is_fit() else 'Auto')
+        if not self._has_voxel_spacing_metadata:
+            button.setText('Fit')
+        else:
+            button.setText('Auto (fit)' if self._auto_display_is_fit() else 'Auto')
 
     def _update_auto_display_aspect(self):
         self.img_view.setAutoAspectRatio(self._auto_display_aspect_ratio())
@@ -2601,6 +2668,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             return
 
         self.data = new_data
+        self._has_voxel_spacing_metadata = voxel_spacing is not None or self._has_voxel_spacing_metadata
         self.voxel_spacing = self._clean_voxel_spacing(
             voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
             new_ndim,
