@@ -427,7 +427,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _dimension_display_name(self, dim):
         label = self.dim_labels[dim]
-        return f"{dim}:{label}" if label else str(dim)
+        return f"{dim}: {label}" if label else str(dim)
 
     def _apply_dimension_button_labels(self):
         for i in range(self.data.ndim):
@@ -449,6 +449,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.data = data
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
         self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
+        # if voxel_spacing is not None:
+        #     print("Assumed voxel spacing:")
+        #     for dim, spacing in enumerate(self.voxel_spacing):
+        #         label = self.dim_labels[dim] or str(dim)
+        #         print(f"  dim {dim} ({label}, size {data.shape[dim]}): {spacing}")
         self._config_path = config_path
         self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
         self.current_colormap = DEFAULT_COLORMAP
@@ -1678,18 +1683,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if len(self.selected_indices) < 2:
             return None
 
-        width_dim = self.selected_indices[0]
-        height_dim = self.selected_indices[1]
-        width_spacing = self.voxel_spacing[width_dim]
-        height_spacing = self.voxel_spacing[height_dim]
-        if width_spacing is None or height_spacing is None:
+        y_dim = self.selected_indices[0]
+        x_dim = self.selected_indices[1]
+        y_spacing = self.voxel_spacing[y_dim]
+        x_spacing = self.voxel_spacing[x_dim]
+        if x_spacing is None or y_spacing is None:
             return None
 
-        width = self.data.shape[width_dim] * width_spacing
-        height = self.data.shape[height_dim] * height_spacing
-        if height <= 0:
-            return None
-        return width / height
+        return x_spacing / y_spacing
 
     def _auto_display_is_fit(self):
         return self._auto_display_aspect_ratio() is None
