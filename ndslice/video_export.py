@@ -18,6 +18,22 @@ except ImportError:
     HAS_IMAGEIO = False
 
 
+def _message_box_enum(enum_group, enum_name, fallback_name=None):
+    """Return a QMessageBox enum value across Qt5 and Qt6 bindings."""
+    message_box = QtWidgets.QMessageBox
+    group = getattr(message_box, enum_group, None)
+    if group is not None and hasattr(group, enum_name):
+        return getattr(group, enum_name)
+    return getattr(message_box, fallback_name or enum_name)
+
+
+def _exec_dialog(dialog):
+    """Execute a dialog across Qt5 and Qt6 bindings."""
+    if hasattr(dialog, "exec"):
+        return dialog.exec()
+    return dialog.exec_()
+
+
 class VideoExportWorker(QtCore.QThread):
     """Worker thread for video export with progress signals"""
     progress_updated = Signal(int, str)  # (current_frame, status_text)
@@ -380,7 +396,7 @@ class VideoExportDialog(QtWidgets.QDialog):
         self.worker.start()
         
         # Show dialog
-        self.exec_()
+        _exec_dialog(self)
     
     def on_progress_updated(self, frame_idx, status_text):
         """Update progress display"""
@@ -398,13 +414,14 @@ class VideoExportDialog(QtWidgets.QDialog):
         if success:
             # Show a message box with optional buttons to open dir or file
             mb = QtWidgets.QMessageBox(self)
-            mb.setIcon(QtWidgets.QMessageBox.Information)
+            mb.setIcon(_message_box_enum("Icon", "Information"))
             mb.setWindowTitle("Export Complete")
             mb.setText(message)
-            open_dir_btn = mb.addButton("Open directory", QtWidgets.QMessageBox.ActionRole)
-            open_file_btn = mb.addButton("Open video", QtWidgets.QMessageBox.ActionRole)
-            ok_btn = mb.addButton(QtWidgets.QMessageBox.Ok)
-            mb.exec_()
+            action_role = _message_box_enum("ButtonRole", "ActionRole")
+            open_dir_btn = mb.addButton("Open directory", action_role)
+            open_file_btn = mb.addButton("Open video", action_role)
+            ok_btn = mb.addButton(_message_box_enum("StandardButton", "Ok"))
+            _exec_dialog(mb)
 
             clicked = mb.clickedButton()
             try:
