@@ -11,11 +11,14 @@ from pathlib import Path
 from .imageview2d import ImageView2D
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
 from .config import (
+    ANGLE_COLORMAP_SAME,
+    DEFAULT_CHANNEL,
     DEFAULT_COLORMAP, 
     DEFAULT_DISPLAY_MODE, 
     INITIAL_INDEX_CENTER, 
     INITIAL_INDEX_FIRST, 
     INITIAL_INDEX_LAST, 
+    SUPPORTED_CHANNELS,
     SUPPORTED_DISPLAY_MODES, 
     load_config, 
     save_config, 
@@ -363,6 +366,13 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         "center": "Center",
         "last": "Last",
     }
+    CHANNEL_LABELS = {
+        "auto": "Auto",
+        "real": "Real",
+        "abs": "Abs",
+        "imag": "Imag",
+        "angle": "Angle",
+    }
     
     @staticmethod
     def _set_emoji_font(widget):
@@ -602,7 +612,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             btn.setStyleSheet(self.RADIO_BUTTON_STYLE)
             self.channel_button_group.addButton(btn)
             channel_layout.addWidget(btn)
-            btn.clicked.connect(self.update)
+            btn.clicked.connect(self._on_channel_changed)
         
         channel_group.setLayout(channel_layout)
         controls_layout.addWidget(channel_group)
@@ -849,8 +859,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
         self._apply_startup_indices()
-        self.setColormap(self._viewer_config.default_colormap)
         self._apply_default_display_mode()
+        self._apply_default_channel()
+        self._apply_effective_colormap()
         self.update_dimension_controls()  # Initialize dimension controls properly
         self.update()
         self.show()
@@ -916,6 +927,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         menu.addSeparator()
 
+        channel_row = QtWidgets.QWidget(menu)
+        channel_layout = QtWidgets.QHBoxLayout()
+        channel_layout.setContentsMargins(8, 4, 8, 4)
+        channel_layout.setSpacing(8)
+
+        channel_label = QtWidgets.QLabel("Default channel")
+        self._channel_combo = QtWidgets.QComboBox(channel_row)
+        for channel in SUPPORTED_CHANNELS:
+            self._channel_combo.addItem(
+                self.CHANNEL_LABELS.get(channel, channel),
+                channel,
+            )
+
+        channel_index = self._channel_combo.findData(self._viewer_config.default_channel)
+        if channel_index < 0:
+            channel_index = self._channel_combo.findData(DEFAULT_CHANNEL)
+        self._channel_combo.setCurrentIndex(max(0, channel_index))
+        self._channel_combo.currentIndexChanged.connect(self._on_default_channel_changed)
+
+        channel_layout.addWidget(channel_label)
+        channel_layout.addWidget(self._channel_combo)
+        channel_row.setLayout(channel_layout)
+
+        channel_action = QtWidgets.QWidgetAction(menu)
+        channel_action.setDefaultWidget(channel_row)
+        menu.addAction(channel_action)
+
         colormap_row = QtWidgets.QWidget(menu)
         colormap_layout = QtWidgets.QHBoxLayout()
         colormap_layout.setContentsMargins(8, 4, 8, 4)
@@ -940,6 +978,40 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         colormap_action = QtWidgets.QWidgetAction(menu)
         colormap_action.setDefaultWidget(colormap_row)
         menu.addAction(colormap_action)
+
+        angle_colormap_row = QtWidgets.QWidget(menu)
+        angle_colormap_layout = QtWidgets.QHBoxLayout()
+        angle_colormap_layout.setContentsMargins(8, 4, 8, 4)
+        angle_colormap_layout.setSpacing(8)
+
+        angle_colormap_label = QtWidgets.QLabel("Angle colormap")
+        self._angle_colormap_combo = QtWidgets.QComboBox(angle_colormap_row)
+        self._angle_colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        self._angle_colormap_combo.addItem("Same", ANGLE_COLORMAP_SAME)
+        for colormap_name in COLORMAP_NAMES:
+            self._angle_colormap_combo.addItem(
+                self._colormap_icon(colormap_name),
+                colormap_name,
+                colormap_name,
+            )
+
+        angle_colormap_index = self._angle_colormap_combo.findData(
+            self._viewer_config.angle_colormap
+        )
+        if angle_colormap_index < 0:
+            angle_colormap_index = self._angle_colormap_combo.findData(ANGLE_COLORMAP_SAME)
+        self._angle_colormap_combo.setCurrentIndex(max(0, angle_colormap_index))
+        self._angle_colormap_combo.currentIndexChanged.connect(
+            self._on_angle_colormap_changed
+        )
+
+        angle_colormap_layout.addWidget(angle_colormap_label)
+        angle_colormap_layout.addWidget(self._angle_colormap_combo)
+        angle_colormap_row.setLayout(angle_colormap_layout)
+
+        angle_colormap_action = QtWidgets.QWidgetAction(menu)
+        angle_colormap_action.setDefaultWidget(angle_colormap_row)
+        menu.addAction(angle_colormap_action)
 
         display_row = QtWidgets.QWidget(menu)
         display_layout = QtWidgets.QHBoxLayout()
@@ -1000,6 +1072,45 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         button.setChecked(True)
         self.update_display_mode()
 
+    def _apply_default_channel(self):
+        self._set_channel(self._viewer_config.default_channel)
+
+    def _set_channel(self, channel):
+        if channel == DEFAULT_CHANNEL:
+            self._update_channel_controls()
+            return
+
+        button = self.widgets['buttons']['channel'].get(channel)
+        if button is not None and button.isEnabled():
+            button.setChecked(True)
+        else:
+            self._update_channel_controls()
+
+    def _current_channel_name(self):
+        return next(
+            (
+                name
+                for name, button in self.widgets['buttons']['channel'].items()
+                if button.isChecked()
+            ),
+            None,
+        )
+
+    def _effective_colormap_name(self):
+        if (
+            self._current_channel_name() == "angle"
+            and self._viewer_config.angle_colormap != ANGLE_COLORMAP_SAME
+        ):
+            return self._viewer_config.angle_colormap
+        return self._viewer_config.default_colormap
+
+    def _apply_effective_colormap(self):
+        self.setColormap(self._effective_colormap_name())
+
+    def _on_channel_changed(self):
+        self._apply_effective_colormap()
+        self.update()
+
     def _on_initial_index_changed(self, index):
         initial_index = self._initial_index_combo.itemData(index)
         if initial_index not in (INITIAL_INDEX_FIRST, INITIAL_INDEX_CENTER, INITIAL_INDEX_LAST):
@@ -1008,13 +1119,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
         self._save_viewer_config()
 
+    def _on_default_channel_changed(self, index):
+        channel = self._channel_combo.itemData(index)
+        if channel not in SUPPORTED_CHANNELS:
+            channel = DEFAULT_CHANNEL
+
+        self._viewer_config = replace(self._viewer_config, default_channel=channel)
+        self._save_viewer_config()
+        self._set_channel(channel)
+        self._apply_effective_colormap()
+        self.update()
+
     def _on_default_colormap_changed(self, colormap_name):
         if colormap_name not in COLORMAP_NAMES:
             colormap_name = DEFAULT_COLORMAP
 
         self._viewer_config = replace(self._viewer_config, default_colormap=colormap_name)
         self._save_viewer_config()
-        self.setColormap(colormap_name)
+        self._apply_effective_colormap()
+
+    def _on_angle_colormap_changed(self, index):
+        colormap_name = self._angle_colormap_combo.itemData(index)
+        if colormap_name != ANGLE_COLORMAP_SAME and colormap_name not in COLORMAP_NAMES:
+            colormap_name = ANGLE_COLORMAP_SAME
+
+        self._viewer_config = replace(self._viewer_config, angle_colormap=colormap_name)
+        self._save_viewer_config()
+        self._apply_effective_colormap()
 
     def _on_default_display_mode_changed(self, index):
         display_mode = self._display_mode_combo.itemData(index)
@@ -1224,6 +1355,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             checked_channel = 'abs' if is_complex else 'real'
 
         channel_buttons[checked_channel].setChecked(True)
+
+        if hasattr(self, 'img_view'):
+            self._apply_effective_colormap()
     
     def complexOrRealClicked(self, event, dim):
         if self.can_combine_as_complex[dim] and not self.combined_as_complex[dim]:
