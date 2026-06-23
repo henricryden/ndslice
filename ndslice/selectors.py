@@ -14,6 +14,9 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
     if selector_class_name == 'H5DatasetSelector':
         from .selectors import H5DatasetSelector
         selector_class = H5DatasetSelector
+    elif selector_class_name == 'RieslingH5DatasetSelector':
+        from .selectors import RieslingH5DatasetSelector
+        selector_class = RieslingH5DatasetSelector
     elif selector_class_name == 'NpzDatasetSelector':
         from .selectors import NpzDatasetSelector
         selector_class = NpzDatasetSelector
@@ -35,6 +38,7 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
     if selected_path := selector.show():
         data = selector.load_data(selected_path)
         dim_labels = selector.dim_labels_for_path(selected_path, data.ndim)
+        voxel_spacing = selector.voxel_spacing_for_path(selected_path, data.ndim)
         selector.close()
         ndslice(data=data,
                 title=f"{filepath.name} - {selected_path}",
@@ -43,7 +47,8 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
                 filepath=filepath,
                 dataset_path=selected_path,
                 selector_class_name=selector_class_name,
-                dim_labels=dim_labels)
+                dim_labels=dim_labels,
+                voxel_spacing=voxel_spacing)
 
 
 class DatasetSelector:
@@ -78,6 +83,9 @@ class DatasetSelector:
     def dim_labels_for_path(self, path, data_ndim=None):
         return None
 
+    def voxel_spacing_for_path(self, path, data_ndim=None):
+        return None
+
     def close(self):
         """Close any open file handles. Subclasses override if needed."""
         pass
@@ -108,6 +116,7 @@ class DatasetSelector:
             if result:
                 name, data = result
                 dim_labels = self.dim_labels_for_path(name, data.ndim)
+                voxel_spacing = self.voxel_spacing_for_path(name, data.ndim)
                 self.close()
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {name}",
@@ -116,7 +125,8 @@ class DatasetSelector:
                         filepath=self.filepath,
                         dataset_path=name,
                         selector_class_name=self.__class__.__name__,
-                        dim_labels=dim_labels)
+                        dim_labels=dim_labels,
+                        voxel_spacing=voxel_spacing)
                 return True
             else:
                 return False
@@ -130,6 +140,7 @@ class DatasetSelector:
             if selected_path := self.show():
                 data = self.load_data(selected_path)
                 dim_labels = self.dim_labels_for_path(selected_path, data.ndim)
+                voxel_spacing = self.voxel_spacing_for_path(selected_path, data.ndim)
                 self.close()
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {selected_path}",
@@ -138,7 +149,8 @@ class DatasetSelector:
                         filepath=self.filepath,
                         dataset_path=selected_path,
                         selector_class_name=self.__class__.__name__,
-                        dim_labels=dim_labels)
+                        dim_labels=dim_labels,
+                        voxel_spacing=voxel_spacing)
                 return True
             return False
         else:
@@ -481,6 +493,90 @@ class H5DatasetSelector(DatasetSelector):
                                       full_path, is_compatible, data=item)
         
         add_items(self.tree, self.h5_file)
+
+
+class RieslingH5DatasetSelector(H5DatasetSelector):
+    """HDF5 selector for Riesling output files with info voxel metadata."""
+
+    @staticmethod
+    def _valid_spacing_value(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return value if np.isfinite(value) and value > 0 else None
+
+    @classmethod
+    def is_riesling_file(cls, filepath):
+        try:
+            import h5py as h5
+        except ImportError:
+            return False
+
+        try:
+            with h5.File(filepath, 'r') as h5_file:
+                return (
+                    'data' in h5_file
+                    and isinstance(h5_file['data'], h5.Dataset)
+                    and cls._voxel_sizes_from_file(h5_file) is not None
+                )
+        except Exception:
+            return False
+
+    @classmethod
+    def _voxel_sizes_from_file(cls, h5_file):
+        if 'info/voxel_sizes' in h5_file:
+            values = np.asarray(h5_file['info/voxel_sizes'][()]).squeeze()
+            if values.size >= 3:
+                return [values.flat[0], values.flat[1], values.flat[2]]
+
+        if 'info' not in h5_file:
+            return None
+
+        info = h5_file['info']
+        names = getattr(info.dtype, 'names', None)
+        if not names:
+            return None
+
+        field_name = next((name for name in ('voxel_size', 'voxel_sizes') if name in names), None)
+        if field_name is None:
+            return None
+
+        field_values = info[field_name][()]
+        if np.asarray(field_values).shape[0:1] == (1,):
+            field_values = field_values[0]
+        values = np.asarray(field_values).squeeze()
+        if values.size < 3:
+            return None
+        return [values.flat[0], values.flat[1], values.flat[2]]
+
+    def _riesling_voxel_sizes_ijk(self):
+        return self._voxel_sizes_from_file(self.h5_file)
+
+    def voxel_spacing_for_path(self, path, data_ndim=None):
+        if path != 'data':
+            return None
+
+        labels = self.dim_labels_for_path(path, data_ndim=data_ndim)
+        voxel_sizes = self._riesling_voxel_sizes_ijk()
+        if labels is None or voxel_sizes is None:
+            return None
+
+        spacing_by_label = {
+            'i': self._valid_spacing_value(voxel_sizes[0]),
+            'j': self._valid_spacing_value(voxel_sizes[1]),
+            'k': self._valid_spacing_value(voxel_sizes[2]),
+        }
+        spacing = [spacing_by_label.get(str(label).strip().lower()) for label in labels]
+        if data_ndim is not None and len(spacing) != data_ndim:
+            return None
+        return spacing
+
+
+def h5_selector_for_path(filepath):
+    if RieslingH5DatasetSelector.is_riesling_file(filepath):
+        return RieslingH5DatasetSelector(filepath)
+    return H5DatasetSelector(filepath)
 
 
 

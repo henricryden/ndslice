@@ -2513,14 +2513,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             new_data = None
             new_dataset_path = self._dataset_path
             new_dim_labels = self.dim_labels
+            new_voxel_spacing = self.voxel_spacing
 
             if self._selector_class_name is None:
                 from .file_interpreters import load_file
                 new_data = load_file(self._filepath)
             else:
-                from .selectors import H5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
+                from .selectors import H5DatasetSelector, RieslingH5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
                 selector_map = {
                     'H5DatasetSelector': H5DatasetSelector,
+                    'RieslingH5DatasetSelector': RieslingH5DatasetSelector,
                     'NpzDatasetSelector': NpzDatasetSelector,
                     'MatDatasetSelector': MatDatasetSelector,
                 }
@@ -2534,6 +2536,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     labels = selector.dim_labels_for_path(self._dataset_path, new_data.ndim)
                     if labels is not None:
                         new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(self._dataset_path, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
                     selector.close()
                 elif selector.requires_gui():
                     selected = selector.show()
@@ -2544,6 +2549,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     labels = selector.dim_labels_for_path(selected, new_data.ndim)
                     if labels is not None:
                         new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(selected, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
                     new_dataset_path = selected
                     selector.close()
                 else:
@@ -2555,13 +2563,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     labels = selector.dim_labels_for_path(new_dataset_path, new_data.ndim)
                     if labels is not None:
                         new_dim_labels = labels
+                    spacing = selector.voxel_spacing_for_path(new_dataset_path, new_data.ndim)
+                    if spacing is not None:
+                        new_voxel_spacing = spacing
                     selector.close()
 
             if new_data is None:
                 return
 
             self._dataset_path = new_dataset_path
-            self._reset_data(new_data, dim_labels=new_dim_labels)
+            self._reset_data(new_data, dim_labels=new_dim_labels, voxel_spacing=new_voxel_spacing)
             self._reload_btn.setText("⟳")
             self._reload_btn.setToolTip("Reload file")
             if self._file_watcher and self._filepath:
@@ -2569,7 +2580,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Reload Error", f"Failed to reload:\n{e}")
 
-    def _reset_data(self, new_data, dim_labels=None):
+    def _reset_data(self, new_data, dim_labels=None, voxel_spacing=None):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
@@ -2583,14 +2594,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 selector_class_name=self._selector_class_name,
                                 config_path=self._config_path,
                                 dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
-                                voxel_spacing=self.voxel_spacing)
+                                voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
-        self.voxel_spacing = self._clean_voxel_spacing(self.voxel_spacing, new_ndim)
+        self.voxel_spacing = self._clean_voxel_spacing(
+            voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
+            new_ndim,
+        )
         if dim_labels is not None:
             self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
             self._apply_dimension_button_labels()
