@@ -11,7 +11,7 @@
 - **Line/bar slice preview** - Hovering the Line Plot/Bar Plot tab now highlights the corresponding row or column in the image view when the plotted dimension matches an image axis.
  **When that preview line is visible, the mouse wheel updates the corresponding slice index instead of switching tabs**.
 - **Dimension labels** - Labels dimensions from NIfTI/DICOM metadata and HDF5 `DIMENSION_LABELS`.
-- **Voxel spacing** 
+- **Voxel spacing** - Support `voxel_spacing` for spatial dimension. Automatically read from nifti, DICOM, and Riesling HDF5 files.
 
 ### Fixed
 - **Qt startup and non-blocking windows** _— Made viewer windows open more reliably across Qt bindings, especially from notebooks and interactive Python sessions. Thanks Thomas Roos.
