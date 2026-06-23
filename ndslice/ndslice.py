@@ -1861,7 +1861,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             delta = event.pixelDelta().y()
         if delta == 0:
             return 0
-        return 1 if delta > 0 else -1
+        multiplier = 10 if event.modifiers() & Qt.QtCore.Qt.KeyboardModifier.AltModifier else 1
+        return multiplier if delta > 0 else -multiplier
 
     def _event_pos(self, event):
         if hasattr(event, 'pos'):
