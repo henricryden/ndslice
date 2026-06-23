@@ -2,6 +2,21 @@
 
 
 
+## [0.8.0]
+
+### Added
+- **Persistent viewer settings** — Added a settings menu backed by a cross-platform TOML config file.
+  - **Startup defaults** - Configure initial indices (`First`, `Center`, `Last`) and initial origin (`Upper left`, `Lower left`, `Upper right`, `Lower right`).
+  - **Display defaults** - Configure default channel, default colormap, angle-specific colormap, and default pixel-ratio display mode.
+- **Line/bar slice preview** - Hovering the Line Plot/Bar Plot tab now highlights the corresponding row or column in the image view when the plotted dimension matches an image axis.
+ **When that preview line is visible, the mouse wheel updates the corresponding slice index instead of switching tabs**.
+- **Dimension labels** - Labels dimension according to NIFTI/DICOM header
+
+### Fixed
+- **Qt startup and non-blocking windows** _— Made viewer windows open more reliably across Qt bindings, especially from notebooks and interactive Python sessions. Thanks Thomas Roos.
+- **Fix missing file extension in video export**
+
+
 ## [0.7.0]
 
 ### Added
@@ -56,4 +71,3 @@
 ### Fixed
 - Window/Level reset on re-clicking `linear` / `symlog`
 - MATLAB v7.3 file loading — falls back to HDF5 loader when scipy.io.loadmat fails
-

@@ -23,6 +23,20 @@ def remove_trailing_singletons(data):
     return data.reshape(shape[:dim+1])
 
 
+def _nifti_dim_labels(ndim):
+    labels = [''] * ndim
+    for dim, label in enumerate(('X', 'Y', 'Z', 'T')):
+        if dim < ndim:
+            labels[dim] = label
+    return labels
+
+
+def _append_dim_label(dim_labels, label):
+    labels = list(dim_labels or [])
+    labels.append(label or '')
+    return labels
+
+
 class PhilipsRECLoader:
     def __init__(self, rec_path):
         self.rec_path = Path(rec_path)
@@ -399,6 +413,7 @@ class DicomDirectoryLoader:
             nifti_paths = []
             json_paths = []
             sidecar_metadata = []
+            nifti_dim_labels = []
 
             for nifti_path, json_path in nifti_outputs:
                 nifti_loader = NiftiLoader(nifti_path)
@@ -406,9 +421,11 @@ class DicomDirectoryLoader:
                 nifti_paths.append(str(nifti_path))
                 json_paths.append(str(json_path) if json_path else None)
                 sidecar_metadata.append(_read_json_sidecar(json_path))
+                nifti_dim_labels.append(nifti_loader.metadata.get('dim_labels', []))
 
             if len(arrays) == 1:
                 data = arrays[0]
+                dim_labels = list(nifti_dim_labels[0]) if nifti_dim_labels else _nifti_dim_labels(data.ndim)
                 stacking_label = None
                 stacking_key = None
                 stacking_values = None
@@ -430,10 +447,13 @@ class DicomDirectoryLoader:
                     if any(description is not None for description in series_descriptions):
                         print(f"  SeriesDescription: {series_descriptions}")
                 data = np.stack(arrays, axis=-1)
+                base_dim_labels = list(nifti_dim_labels[0]) if nifti_dim_labels else _nifti_dim_labels(arrays[0].ndim)
+                dim_labels = _append_dim_label(base_dim_labels, stacking_label)
 
             self.metadata.update({
                 'shape': tuple(data.shape),
                 'dtype': str(data.dtype),
+                'dim_labels': dim_labels,
                 'nifti_output_path': nifti_paths[0] if len(nifti_paths) == 1 else nifti_paths,
                 'sidecar_json_path': json_paths[0] if len(json_paths) == 1 else json_paths,
                 'stacked_dimension': stacking_label,
@@ -468,6 +488,7 @@ class NiftiLoader:
         self.metadata.update({
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
+            'dim_labels': _nifti_dim_labels(data.ndim),
         })
         return data
 

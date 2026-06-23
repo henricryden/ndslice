@@ -389,12 +389,34 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             font.setFamily('Apple Color Emoji')
             widget.setFont(font)
 
+    @staticmethod
+    # Turns e.g. ["X", None, "T", "extra"] -> ["X", "", "T"] (ndim=3)
+    def _clean_dim_labels(dim_labels, ndim):
+        labels = [''] * ndim
+        if dim_labels is None:
+            return labels
+
+        for dim, label in enumerate(dim_labels):
+            if dim >= ndim:
+                break
+            if label is None:
+                continue
+            label = str(label).strip()
+            if label:
+                labels[dim] = label
+        return labels
+
+    def _dimension_display_name(self, dim):
+        label = self.dim_labels[dim]
+        return f"{dim} : {label}" if label else str(dim)
+
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
-                 selector_class_name=None, config_path=None):
+                 selector_class_name=None, config_path=None, dim_labels=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
+        self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
         self._config_path = config_path
         self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
         self.current_colormap = DEFAULT_COLORMAP
@@ -439,8 +461,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.domain = [Domain.NATIVE for _ in range(data.ndim)]
         self.widgets = {
             'buttons': {
-                'primary': [QtWidgets.QPushButton(str(i), checkable=True) for i in range(data.ndim)],
-                'secondary': [QtWidgets.QPushButton(str(i), checkable=True) for i in range(data.ndim)],
+                'primary': [QtWidgets.QPushButton(self._dimension_display_name(i), checkable=True) for i in range(data.ndim)],
+                'secondary': [QtWidgets.QPushButton(self._dimension_display_name(i), checkable=True) for i in range(data.ndim)],
                 'channel': {
                     'real': QtWidgets.QRadioButton('real', enabled=np.iscomplexobj(self.data)),
                     'imag': QtWidgets.QRadioButton('imag', enabled=np.iscomplexobj(self.data)),
@@ -539,6 +561,13 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
             btn.setStyleSheet(self.BUTTON_STYLE)
+
+        for i in range(data.ndim):
+            tooltip = f"Dimension {i}"
+            if self.dim_labels[i]:
+                tooltip += f": {self.dim_labels[i]}"
+            self.widgets['buttons']['primary'][i].setToolTip(tooltip)
+            self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
             
         for spin in self.widgets['spins']['slice_indices']:
             spin.setStyleSheet(self.SPINBOX_STYLE)
@@ -1750,7 +1779,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             else:
                 print(f'Warning: Expected 1D data but got {line_data.ndim}D data with shape {line_data.shape}')
             
-            self.plot_widget.setLabel('bottom', f'Index along dim {self.line_plot_dimension}')
+            self.plot_widget.setLabel('bottom', f'Index along {self._dimension_display_name(self.line_plot_dimension)}')
             
         except Exception as e:
             print(f'Line plot update failed: {e}')
@@ -2468,7 +2497,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 filepath=self._filepath,
                                 dataset_path=self._dataset_path,
                                 selector_class_name=self._selector_class_name,
-                                config_path=self._config_path)
+                                config_path=self._config_path,
+                                dim_labels=self.dim_labels)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
@@ -2593,7 +2623,7 @@ def _retain_window_reference(app, win):
     win.destroyed.connect(_release_reference)
 
 def _create_window(data, title='', complex_dim=None, filepath=None,
-                   dataset_path=None, selector_class_name=None):
+                   dataset_path=None, selector_class_name=None, dim_labels=None):
     _prepare_qt_environment()
 
     app = pg.mkQApp()
@@ -2601,20 +2631,22 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
 
     win = NDSliceWindow(data, complex_dim=complex_dim, filepath=filepath,
                         dataset_path=dataset_path,
-                        selector_class_name=selector_class_name)
+                        selector_class_name=selector_class_name,
+                        dim_labels=dim_labels)
     win.setWindowTitle(title)
     win.show()
 
     return app, win
 
 def _run_window(data, title='', complex_dim=None, filepath=None,
-                dataset_path=None, selector_class_name=None):
+                dataset_path=None, selector_class_name=None, dim_labels=None):
     """Open a viewer window in this process and block on the Qt event loop."""
     try:
         app, win = _create_window(
             data, title=title, complex_dim=complex_dim,
             filepath=filepath, dataset_path=dataset_path,
             selector_class_name=selector_class_name,
+            dim_labels=dim_labels,
         )
         return app.exec()
     except BaseException:
@@ -2623,12 +2655,13 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
         raise
 
 def _show_window_inline(data, title='', complex_dim=None, filepath=None,
-                        dataset_path=None, selector_class_name=None):
+                        dataset_path=None, selector_class_name=None, dim_labels=None):
     """Open a viewer window in this process without starting app.exec()."""
     app, win = _create_window(
         data, title=title, complex_dim=complex_dim,
         filepath=filepath, dataset_path=dataset_path,
         selector_class_name=selector_class_name,
+        dim_labels=dim_labels,
     )
 
     _retain_window_reference(app, win)
@@ -2636,7 +2669,7 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
     return win
 
 def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
-            dataset_path=None, selector_class_name=None):
+            dataset_path=None, selector_class_name=None, dim_labels=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
@@ -2646,6 +2679,7 @@ def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
         "filepath": filepath,
         "dataset_path": dataset_path,
         "selector_class_name": selector_class_name,
+        "dim_labels": dim_labels,
     }
 
     if block:

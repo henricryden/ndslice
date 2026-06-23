@@ -50,7 +50,8 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
                 detected_format = loaded.metadata.get('detected_format')
                 if detected_format:
                     title = f"{title} [{detected_format}]"
-                ndslice(data=loaded.data, title=title, block=False, filepath=filepath)
+                ndslice(data=loaded.data, title=title, block=False, filepath=filepath,
+                        dim_labels=loaded.metadata.get('dim_labels'))
                 continue
             
             # Multi-dataset formats - use selectors
