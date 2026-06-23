@@ -782,6 +782,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.line_min_pen = 2.0
         self.line_max_pen = 6.0
         self.line_color = (50, 100, 200)
+        self._line_tab_hovered = False
+        self._line_slice_preview_orientation = None
+        self._line_slice_preview_outline = None
+        self._line_slice_preview_fill = None
+        self._line_slice_preview_fixed_dim = None
+        self._create_line_slice_preview_items()
         # Listen to range changes to adapt thickness
         self.plot_widget.getViewBox().sigRangeChanged.connect(self._on_plot_range_changed)
         
@@ -799,6 +805,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Connect tab change handler
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
         
+        self.tab_widget.tabBar().setMouseTracking(True)
         self.tab_widget.tabBar().installEventFilter(self)
         
         # Add tab widget to the main layout
@@ -1591,6 +1598,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             
             # Apply axis flips after setting the image
             self.apply_axis_flips()
+            self._update_line_slice_preview()
             
         except Exception as e:
             print(f'Image update failed: {e}')
@@ -1748,6 +1756,120 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             print(f'Line plot update failed: {e}')
             self.current_line_data = None
 
+    def _create_line_slice_preview_items(self):
+        self._line_slice_preview_items = {}
+        view = self.img_view.getView()
+        color = self.line_color
+
+        for orientation in ('vertical', 'horizontal'):
+            outline = pg.LinearRegionItem(
+                values=(0, 1),
+                orientation=orientation,
+                brush=pg.mkBrush(255, 255, 255, 120),
+                pen=pg.mkPen(255, 255, 255, 220, width=2),
+                movable=False,
+            )
+            fill = pg.LinearRegionItem(
+                values=(0, 1),
+                orientation=orientation,
+                brush=pg.mkBrush(color[0], color[1], color[2], 110),
+                pen=pg.mkPen(color[0], color[1], color[2], 230, width=1),
+                movable=False,
+            )
+
+            outline.setZValue(20)
+            fill.setZValue(21)
+            outline.setVisible(False)
+            fill.setVisible(False)
+            view.addItem(outline)
+            view.addItem(fill)
+            self._line_slice_preview_items[orientation] = (outline, fill)
+
+    def _hide_line_slice_preview(self):
+        if not hasattr(self, '_line_slice_preview_items'):
+            return
+        for outline, fill in self._line_slice_preview_items.values():
+            outline.setVisible(False)
+            fill.setVisible(False)
+        self._line_slice_preview_orientation = None
+        self._line_slice_preview_fixed_dim = None
+
+    def _set_line_tab_hovered(self, hovered):
+        self._line_tab_hovered = bool(hovered)
+        if self._line_tab_hovered:
+            self._update_line_slice_preview()
+        else:
+            self._hide_line_slice_preview()
+
+    def _update_line_slice_preview(self):
+        if (
+            not getattr(self, '_line_tab_hovered', False)
+            or self.data.ndim == 1
+            or len(self.selected_indices) < 2
+            or self.line_plot_dimension not in self.selected_indices[:2]
+        ):
+            self._hide_line_slice_preview()
+            return
+
+        if self.line_plot_dimension == self.selected_indices[1]:
+            orientation = 'horizontal'
+            fixed_dim = self.selected_indices[0]
+        else:
+            orientation = 'vertical'
+            fixed_dim = self.selected_indices[1]
+
+        idx = self.widgets['spins']['slice_indices'][fixed_dim].value()
+        region = (idx - 0.5, idx + 0.5)
+        outline_region = (idx - 0.6, idx + 0.6)
+
+        for item_orientation, (outline, fill) in self._line_slice_preview_items.items():
+            visible = item_orientation == orientation
+            outline.setVisible(visible)
+            fill.setVisible(visible)
+            if visible:
+                outline.setRegion(outline_region)
+                fill.setRegion(region)
+
+        self._line_slice_preview_orientation = orientation
+        self._line_slice_preview_fixed_dim = fixed_dim
+
+    def _line_slice_preview_is_visible(self):
+        if not hasattr(self, '_line_slice_preview_items'):
+            return False
+        return any(fill.isVisible() for _outline, fill in self._line_slice_preview_items.values())
+
+    def _step_line_slice_preview(self, steps):
+        fixed_dim = getattr(self, '_line_slice_preview_fixed_dim', None)
+        if fixed_dim is None or steps == 0:
+            return False
+
+        spinbox = self.widgets['spins']['slice_indices'][fixed_dim]
+        value = spinbox.value()
+        new_value = max(spinbox.minimum(), min(spinbox.maximum(), value + steps))
+        if new_value == value:
+            return True
+
+        spinbox.setValue(new_value)
+        self._update_line_slice_preview()
+        return True
+
+    def _wheel_steps(self, event):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            delta = event.angleDelta().x()
+        if delta == 0 and hasattr(event, 'pixelDelta'):
+            delta = event.pixelDelta().y()
+        if delta == 0:
+            return 0
+        return 1 if delta > 0 else -1
+
+    def _event_pos(self, event):
+        if hasattr(event, 'pos'):
+            return event.pos()
+        if hasattr(event, 'position'):
+            return event.position().toPoint()
+        return Qt.QtCore.QPoint()
+
     def _on_plot_range_changed(self, vb, ranges):
         """Adapt line pen thickness based on horizontal zoom.
 
@@ -1820,6 +1942,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def on_tab_changed(self, index):
         """Handle tab change between Image View and Line Plot"""
+        self._set_line_tab_hovered(False)
         self.update_dimension_controls()
         self.update()
         # Hide crosshair if leaving line plot
@@ -1931,6 +2054,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
         
         self.update_flip_icons()
+        if hasattr(self, '_line_slice_preview_items'):
+            self._update_line_slice_preview()
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
@@ -2085,10 +2210,23 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def eventFilter(self, obj, event):
         if obj == self.tab_widget.tabBar():
+            if event.type() == Qt.QtCore.QEvent.Type.MouseMove:
+                tab_bar = self.tab_widget.tabBar()
+                self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
+            elif event.type() == Qt.QtCore.QEvent.Type.Leave:
+                self._set_line_tab_hovered(False)
+            elif event.type() == Qt.QtCore.QEvent.Type.Wheel:
+                tab_bar = self.tab_widget.tabBar()
+                self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
+                if self._line_slice_preview_is_visible():
+                    if self._step_line_slice_preview(self._wheel_steps(event)):
+                        event.accept()
+                        return True
+
             if event.type() == Qt.QtCore.QEvent.Type.MouseButtonDblClick:
                 # which tab was double-clicked
                 tab_bar = self.tab_widget.tabBar()
-                clicked_index = tab_bar.tabAt(event.pos())
+                clicked_index = tab_bar.tabAt(self._event_pos(event))
                 
                 # Check if line/bar tab (index 1)
                 if clicked_index == 1:
