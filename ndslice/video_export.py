@@ -316,7 +316,7 @@ class VideoExportWorker(QtCore.QThread):
                 if dm == 'square_fov':
                     side = max(w, h)
                     target_w = target_h = side
-                elif dm == 'fit':
+                elif dm in ('fit', 'auto'):
                     # Match current widget aspect
                     ratio = self.widget_ratio if self.widget_ratio > 0 else 1.0
                     target_w = max(w, h)

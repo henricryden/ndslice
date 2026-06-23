@@ -36,8 +36,11 @@ DEFAULT_DISPLAY_MODE = "square_pixels"
 SUPPORTED_DISPLAY_MODES = (
     "square_pixels",
     "square_fov",
-    "fit",
+    "auto",
 )
+DISPLAY_MODE_ALIASES = {
+    "fit": "auto",
+}
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ def load_config(path=None, colormap_names=None):
         angle_colormap = ANGLE_COLORMAP_SAME
 
     default_display_mode = display.get("default_display_mode", DEFAULT_DISPLAY_MODE)
+    default_display_mode = DISPLAY_MODE_ALIASES.get(default_display_mode, default_display_mode)
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 
@@ -143,6 +147,7 @@ def save_config(config, path=None, colormap_names=None):
         angle_colormap = ANGLE_COLORMAP_SAME
 
     default_display_mode = config.default_display_mode
+    default_display_mode = DISPLAY_MODE_ALIASES.get(default_display_mode, default_display_mode)
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 

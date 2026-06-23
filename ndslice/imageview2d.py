@@ -34,6 +34,7 @@ class ImageView2D(QtWidgets.QWidget):
         self.levelMin = None
         self.levelMax = None
         self.displayMode = 'square_pixels'  # Default to square pixels
+        self.autoAspectRatio = None
         
         # Create the UI layout
         self.setupUI()
@@ -222,18 +223,26 @@ class ImageView2D(QtWidgets.QWidget):
         """Set the color map for the histogram"""
         self.histogram.gradient.setColorMap(colormap)
         
-    def setDisplayMode(self, mode):
+    def setDisplayMode(self, mode, auto_aspect_ratio=None):
         """Set the display mode.
 
         Modes:
         - 'square_pixels': force square pixel display (aspect ratio 1.0)
         - 'square_fov'   : lock aspect ratio to image width/height (field of view square)
-        - 'fit'          : allow non-uniform scaling so the entire image fits viewport
+        - 'auto'         : lock to provided physical aspect, or fit if unavailable
         """
-        if mode not in ('square_pixels', 'square_fov', 'fit'):
+        if mode == 'fit':
+            mode = 'auto'
+        if mode not in ('square_pixels', 'square_fov', 'auto'):
             raise ValueError(f"Unknown display mode: {mode}")
         self.displayMode = mode
+        self.autoAspectRatio = auto_aspect_ratio
         self._updateAspectRatio()
+
+    def setAutoAspectRatio(self, auto_aspect_ratio):
+        self.autoAspectRatio = auto_aspect_ratio
+        if self.displayMode == 'auto':
+            self._updateAspectRatio()
         
     def _updateAspectRatio(self):
         """Update the aspect ratio based on display mode"""
@@ -248,11 +257,12 @@ class ImageView2D(QtWidgets.QWidget):
             height, width = self.image.shape
             aspect_ratio = width / height
             self.view.setAspectLocked(True, ratio=aspect_ratio)
-        elif self.displayMode == 'fit':
-            # Fit: allow free aspect so the whole image fits inside the view box
-            self.view.setAspectLocked(False)
-            # Ensure view box ranges cover the image exactly
-            self.view.autoRange()
+        elif self.displayMode == 'auto':
+            if self.autoAspectRatio is None:
+                self.view.setAspectLocked(False)
+                self.view.autoRange()
+            else:
+                self.view.setAspectLocked(True, ratio=self.autoAspectRatio)
         
         # Trigger a refresh of the view
         if hasattr(self, 'imageItem') and self.imageItem is not None:
@@ -260,7 +270,7 @@ class ImageView2D(QtWidgets.QWidget):
 
     # --- Qt Events -----------------------------------------------------
     def resizeEvent(self, event):
-        """On resize, if in 'fit' mode keep the image fully visible."""
+        """On resize, if in auto-fit mode keep the image fully visible."""
         super().resizeEvent(event)
-        if self.displayMode == 'fit' and self.image is not None:
+        if self.displayMode == 'auto' and self.autoAspectRatio is None and self.image is not None:
             self.view.autoRange()

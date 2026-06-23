@@ -361,7 +361,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     DISPLAY_MODE_LABELS = {
         "square_pixels": "Square pixels",
         "square_fov": "Square FOV",
-        "fit": "Fit",
+        "auto": "Auto",
     }
     INITIAL_INDEX_LABELS = {
         "first": "First",
@@ -406,6 +406,25 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 labels[dim] = label
         return labels
 
+    @staticmethod
+    def _clean_voxel_spacing(voxel_spacing, ndim):
+        spacing = [None] * ndim
+        if voxel_spacing is None:
+            return spacing
+
+        for dim, value in enumerate(voxel_spacing):
+            if dim >= ndim:
+                break
+            if value is None:
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value) and value > 0:
+                spacing[dim] = value
+        return spacing
+
     def _dimension_display_name(self, dim):
         label = self.dim_labels[dim]
         return f"{dim}:{label}" if label else str(dim)
@@ -422,12 +441,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
 
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
-                 selector_class_name=None, config_path=None, dim_labels=None):
+                 selector_class_name=None, config_path=None, dim_labels=None,
+                 voxel_spacing=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
+        self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
         self._config_path = config_path
         self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
         self.current_colormap = DEFAULT_COLORMAP
@@ -490,7 +511,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 'display': {
                     'square_pixels': QtWidgets.QRadioButton('Square pixels', checkable=True, checked=True),
                     'square_fov': QtWidgets.QRadioButton('Square FOV', checkable=True),
-                    'fit': QtWidgets.QRadioButton('Fit', checkable=True)
+                    'auto': QtWidgets.QRadioButton('Auto', checkable=True)
                 }
             },
             'labels': {
@@ -527,7 +548,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.display_button_group = QtWidgets.QButtonGroup()
         self.display_button_group.addButton(self.widgets['buttons']['display']['square_pixels'])
         self.display_button_group.addButton(self.widgets['buttons']['display']['square_fov'])
-        self.display_button_group.addButton(self.widgets['buttons']['display']['fit'])
+        self.display_button_group.addButton(self.widgets['buttons']['display']['auto'])
         
         self.layouts = {
             'main': QtWidgets.QVBoxLayout(),
@@ -694,7 +715,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Optional: tooltip hints
         self.widgets['buttons']['display']['square_pixels'].setToolTip('Lock to 1:1 pixel aspect')
         self.widgets['buttons']['display']['square_fov'].setToolTip('Lock aspect to image width/height ratio')
-        self.widgets['buttons']['display']['fit'].setToolTip('Always fit entire image in viewport')
+        self.widgets['buttons']['display']['auto'].setToolTip(
+            'Use voxel spacing aspect when available; otherwise fit entire image in viewport'
+        )
         
         self.display_group.setLayout(display_layout)
         controls_layout.addWidget(self.display_group)
@@ -717,7 +740,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.image_tab.setLayout(self.image_tab_layout)
         self.img_view.getView().scene().sigMouseMoved.connect(lambda pos: self.getPixel(pos))
         
-        # Connect to view range changes to update aspect ratio in fit mode
+        # Connect to view range changes to update aspect ratio in auto-fit mode
         self.img_view.getView().sigRangeChanged.connect(self._on_view_range_changed)
         
         # Create line plot tab
@@ -1160,6 +1183,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._set_display_mode(self._viewer_config.default_display_mode)
 
     def _set_display_mode(self, display_mode):
+        if display_mode == 'fit':
+            display_mode = 'auto'
         if display_mode not in SUPPORTED_DISPLAY_MODES:
             display_mode = DEFAULT_DISPLAY_MODE
 
@@ -1644,8 +1669,40 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.img_view.setDisplayMode('square_pixels')
         elif self.widgets['buttons']['display']['square_fov'].isChecked():
             self.img_view.setDisplayMode('square_fov')
-        elif self.widgets['buttons']['display']['fit'].isChecked():
-            self.img_view.setDisplayMode('fit')
+        elif self.widgets['buttons']['display']['auto'].isChecked():
+            self.img_view.setDisplayMode('auto', self._auto_display_aspect_ratio())
+        self._update_auto_display_label()
+        self._update_display_group_title()
+
+    def _auto_display_aspect_ratio(self):
+        if len(self.selected_indices) < 2:
+            return None
+
+        width_dim = self.selected_indices[0]
+        height_dim = self.selected_indices[1]
+        width_spacing = self.voxel_spacing[width_dim]
+        height_spacing = self.voxel_spacing[height_dim]
+        if width_spacing is None or height_spacing is None:
+            return None
+
+        width = self.data.shape[width_dim] * width_spacing
+        height = self.data.shape[height_dim] * height_spacing
+        if height <= 0:
+            return None
+        return width / height
+
+    def _auto_display_is_fit(self):
+        return self._auto_display_aspect_ratio() is None
+
+    def _update_auto_display_label(self):
+        button = self.widgets['buttons']['display']['auto']
+        button.setText('Auto (fit)' if self._auto_display_is_fit() else 'Auto')
+
+    def _update_auto_display_aspect(self):
+        self.img_view.setAutoAspectRatio(self._auto_display_aspect_ratio())
+        self._update_auto_display_label()
+        if hasattr(self, 'display_group'):
+            self._update_display_group_title()
 
     def _processing_pressed(self, btn):
         """Called on processing button press; if the button is already checked
@@ -1673,10 +1730,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self.display_group.setTitle('Display (1:1)')
             return
         
-        if mode == 'fit': #use the viewport aspect ratio
+        if mode == 'auto':
             aspect_str = ''
             try:
-                if hasattr(self.img_view, 'image') and self.img_view.image is not None:
+                auto_aspect_ratio = self._auto_display_aspect_ratio()
+                if auto_aspect_ratio is not None:
+                    ratio = auto_aspect_ratio
+                    if abs(ratio - 1.0) < 1e-2:
+                        aspect_str = '(1:1)'
+                    else:
+                        aspect_str = f'({ratio:.2f}:1)'
+                elif hasattr(self.img_view, 'image') and self.img_view.image is not None:
                     view = self.img_view.getView()
                     
                     img_height, img_width = self.img_view.image.shape
@@ -1935,7 +1999,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             print(f"Thickness update failed: {e}")
 
     def _on_view_range_changed(self):
-        """Update display group title when view range changes (for fit mode)."""
+        """Update display group title when view range changes."""
         self._update_display_group_title()
 
     def _on_plot_hover(self, pos):
@@ -2090,6 +2154,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.widgets['buttons']['secondary'][self.selected_indices[1]].setChecked(True)
         
         self.update_flip_icons()
+        if hasattr(self, 'img_view'):
+            self._update_auto_display_aspect()
         if hasattr(self, '_line_slice_preview_items'):
             self._update_line_slice_preview()
     
@@ -2515,13 +2581,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 dataset_path=self._dataset_path,
                                 selector_class_name=self._selector_class_name,
                                 config_path=self._config_path,
-                                dim_labels=dim_labels if dim_labels is not None else self.dim_labels)
+                                dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
+                                voxel_spacing=self.voxel_spacing)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
+        self.voxel_spacing = self._clean_voxel_spacing(self.voxel_spacing, new_ndim)
         if dim_labels is not None:
             self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
             self._apply_dimension_button_labels()
@@ -2643,7 +2711,8 @@ def _retain_window_reference(app, win):
     win.destroyed.connect(_release_reference)
 
 def _create_window(data, title='', complex_dim=None, filepath=None,
-                   dataset_path=None, selector_class_name=None, dim_labels=None):
+                   dataset_path=None, selector_class_name=None, dim_labels=None,
+                   voxel_spacing=None):
     _prepare_qt_environment()
 
     app = pg.mkQApp()
@@ -2652,14 +2721,16 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
     win = NDSliceWindow(data, complex_dim=complex_dim, filepath=filepath,
                         dataset_path=dataset_path,
                         selector_class_name=selector_class_name,
-                        dim_labels=dim_labels)
+                        dim_labels=dim_labels,
+                        voxel_spacing=voxel_spacing)
     win.setWindowTitle(title)
     win.show()
 
     return app, win
 
 def _run_window(data, title='', complex_dim=None, filepath=None,
-                dataset_path=None, selector_class_name=None, dim_labels=None):
+                dataset_path=None, selector_class_name=None, dim_labels=None,
+                voxel_spacing=None):
     """Open a viewer window in this process and block on the Qt event loop."""
     try:
         app, win = _create_window(
@@ -2667,6 +2738,7 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
             filepath=filepath, dataset_path=dataset_path,
             selector_class_name=selector_class_name,
             dim_labels=dim_labels,
+            voxel_spacing=voxel_spacing,
         )
         return app.exec()
     except BaseException:
@@ -2675,13 +2747,15 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
         raise
 
 def _show_window_inline(data, title='', complex_dim=None, filepath=None,
-                        dataset_path=None, selector_class_name=None, dim_labels=None):
+                        dataset_path=None, selector_class_name=None, dim_labels=None,
+                        voxel_spacing=None):
     """Open a viewer window in this process without starting app.exec()."""
     app, win = _create_window(
         data, title=title, complex_dim=complex_dim,
         filepath=filepath, dataset_path=dataset_path,
         selector_class_name=selector_class_name,
         dim_labels=dim_labels,
+        voxel_spacing=voxel_spacing,
     )
 
     _retain_window_reference(app, win)
@@ -2689,7 +2763,8 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
     return win
 
 def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
-            dataset_path=None, selector_class_name=None, dim_labels=None):
+            dataset_path=None, selector_class_name=None, dim_labels=None,
+            voxel_spacing=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
@@ -2700,6 +2775,7 @@ def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
         "dataset_path": dataset_path,
         "selector_class_name": selector_class_name,
         "dim_labels": dim_labels,
+        "voxel_spacing": voxel_spacing,
     }
 
     if block:
