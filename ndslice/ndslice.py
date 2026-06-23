@@ -408,7 +408,18 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _dimension_display_name(self, dim):
         label = self.dim_labels[dim]
-        return f"{dim} : {label}" if label else str(dim)
+        return f"{dim}:{label}" if label else str(dim)
+
+    def _apply_dimension_button_labels(self):
+        for i in range(self.data.ndim):
+            display_name = self._dimension_display_name(i)
+            tooltip = f"Dimension {i}"
+            if self.dim_labels[i]:
+                tooltip += f": {self.dim_labels[i]}"
+            self.widgets['buttons']['primary'][i].setText(display_name)
+            self.widgets['buttons']['secondary'][i].setText(display_name)
+            self.widgets['buttons']['primary'][i].setToolTip(tooltip)
+            self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
 
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
                  selector_class_name=None, config_path=None, dim_labels=None):
@@ -562,12 +573,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
             btn.setStyleSheet(self.BUTTON_STYLE)
 
-        for i in range(data.ndim):
-            tooltip = f"Dimension {i}"
-            if self.dim_labels[i]:
-                tooltip += f": {self.dim_labels[i]}"
-            self.widgets['buttons']['primary'][i].setToolTip(tooltip)
-            self.widgets['buttons']['secondary'][i].setToolTip(tooltip)
+        self._apply_dimension_button_labels()
             
         for spin in self.widgets['spins']['slice_indices']:
             spin.setStyleSheet(self.SPINBOX_STYLE)
@@ -2439,6 +2445,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         try:
             new_data = None
             new_dataset_path = self._dataset_path
+            new_dim_labels = self.dim_labels
 
             if self._selector_class_name is None:
                 from .file_interpreters import load_file
@@ -2457,6 +2464,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 compatible_keys = {d[0] for d in selector.compatible_datasets}
                 if self._dataset_path is not None and self._dataset_path in compatible_keys:
                     new_data = selector.load_data(self._dataset_path)
+                    labels = selector.dim_labels_for_path(self._dataset_path, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
                     selector.close()
                 elif selector.requires_gui():
                     selected = selector.show()
@@ -2464,20 +2474,27 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                         selector.close()
                         return  # User cancelled — keep ⚠️ visible
                     new_data = selector.load_data(selected)
+                    labels = selector.dim_labels_for_path(selected, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
                     new_dataset_path = selected
                     selector.close()
                 else:
                     result = selector.get_single_data()
-                    selector.close()
                     if result is None:
+                        selector.close()
                         return
                     new_dataset_path, new_data = result
+                    labels = selector.dim_labels_for_path(new_dataset_path, new_data.ndim)
+                    if labels is not None:
+                        new_dim_labels = labels
+                    selector.close()
 
             if new_data is None:
                 return
 
             self._dataset_path = new_dataset_path
-            self._reset_data(new_data)
+            self._reset_data(new_data, dim_labels=new_dim_labels)
             self._reload_btn.setText("⟳")
             self._reload_btn.setToolTip("Reload file")
             if self._file_watcher and self._filepath:
@@ -2485,7 +2502,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Reload Error", f"Failed to reload:\n{e}")
 
-    def _reset_data(self, new_data):
+    def _reset_data(self, new_data, dim_labels=None):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
@@ -2498,13 +2515,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 dataset_path=self._dataset_path,
                                 selector_class_name=self._selector_class_name,
                                 config_path=self._config_path,
-                                dim_labels=self.dim_labels)
+                                dim_labels=dim_labels if dim_labels is not None else self.dim_labels)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
+        if dim_labels is not None:
+            self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
+            self._apply_dimension_button_labels()
         self.singleton = [e == 1 for e in new_data.shape]
 
         if np.iscomplexobj(new_data):
