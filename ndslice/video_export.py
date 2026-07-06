@@ -43,7 +43,8 @@ class VideoExportWorker(QtCore.QThread):
                  channel_func, processing_func, slice_indices, selected_indices, 
                  singleton, levels=None, transpose=False, pixel_ratio_mode='square_pixels',
                  display_mode='square_pixels', widget_ratio=1.0, axis_flipped=None,
-                 lut=None, window_level_mode='displayed'):
+                 lut=None, window_level_mode='displayed', mask_data=None,
+                 mask_lut=None, mask_enabled=False, mask_opacity=0.5):
         super().__init__()
         self.transpose = transpose
         self.pixel_ratio_mode = pixel_ratio_mode
@@ -51,6 +52,10 @@ class VideoExportWorker(QtCore.QThread):
         self.widget_ratio = widget_ratio
         self.axis_flipped = axis_flipped or []
         self.lut = lut
+        self.mask_data = mask_data
+        self.mask_lut = mask_lut
+        self.mask_enabled = bool(mask_enabled)
+        self.mask_opacity = max(0.0, min(float(mask_opacity), 1.0))
         self.data = data
         self.export_dim = export_dim
         self.output_path = output_path
@@ -76,78 +81,8 @@ class VideoExportWorker(QtCore.QThread):
                 if not self._is_running:
                     self.export_finished.emit(False, "Export cancelled")
                     return
-                
-                # Create slice for this frame
-                frame_slice = list(self.slice_indices)
-                frame_slice[self.export_dim] = slice(frame_idx, frame_idx + 1)
 
-                
-                # Extract frame data
-                frame_data = self.data[tuple(frame_slice)]
-                
-                # Apply channel transformation
-                if self.channel_func is not None:
-                    frame_data = self.channel_func(frame_data)
-                
-                # Apply processing transformation
-                if self.processing_func is not None:
-                    frame_data = self.processing_func(frame_data)
-                
-                # Squeeze and convert to uint8
-                frame_data = np.squeeze(frame_data)
-                
-                # Determine window/level mode: use displayed levels if requested
-                if (str(self.window_level_mode).lower() == 'displayed') and (self.levels is not None):
-                    vmin, vmax = self.levels
-                else:
-                    # 'rescale' or no displayed levels -> compute per-frame
-                    vmin = np.nanmin(frame_data)
-                    vmax = np.nanmax(frame_data)
-                
-                if vmax > vmin:
-                    normalized = (frame_data - vmin) / (vmax - vmin)
-                else:
-                    normalized = np.zeros_like(frame_data)
-                
-                frame_uint8 = np.clip(normalized * 255, 0, 255).astype(np.uint8)
-                
-                # Convert grayscale to RGB for video formats
-                lut = getattr(self, 'lut', None)
-                if frame_uint8.ndim == 2 and lut is not None:
-                    try:
-                        lut_arr = np.asarray(lut)
-                        if lut_arr.shape[1] >= 3:
-                            lut_rgb = np.asarray(lut_arr[:, :3], dtype=np.uint8)
-                            frame_rgb = lut_rgb[frame_uint8]
-                        else:
-                            frame_rgb = np.stack([frame_uint8] * 3, axis=2)
-                    except Exception:
-                        frame_rgb = np.stack([frame_uint8] * 3, axis=2)
-                else:
-                    if frame_uint8.ndim == 2:
-                        frame_rgb = np.stack([frame_uint8] * 3, axis=2)
-                    else:
-                        frame_rgb = frame_uint8
-
-                if self.transpose:
-                    frame_rgb = np.transpose(frame_rgb, (1, 0, 2))
-
-                # Flips
-                try:
-                    primary = self.selected_indices[0]
-                    if not self.axis_flipped[primary]: # numpy uses matrix orientation by default
-                        frame_rgb = np.flipud(frame_rgb)
-                    secondary = self.selected_indices[1]
-                    if self.axis_flipped[secondary]:
-                        frame_rgb = np.fliplr(frame_rgb)
-                except Exception:
-                    pass
-
-                # Apply pixel ratio scaling
-                frame_rgb = self._apply_pixel_ratio(frame_rgb)
-
-
-                frames.append(frame_rgb)
+                frames.append(self._render_frame(frame_idx))
                 
                 status = f"Processing frame {frame_idx + 1}/{total_frames}"
                 self.progress_updated.emit(frame_idx + 1, status)
@@ -168,6 +103,105 @@ class VideoExportWorker(QtCore.QThread):
             
         except Exception as e:
             self.export_finished.emit(False, f"Export failed: {str(e)}")
+
+    def _render_frame(self, frame_idx):
+        frame_slice = list(self.slice_indices)
+        frame_slice[self.export_dim] = slice(frame_idx, frame_idx + 1)
+        frame_slice = tuple(frame_slice)
+
+        frame_data = self.data[frame_slice]
+        if self.channel_func is not None:
+            frame_data = self.channel_func(frame_data)
+        if self.processing_func is not None:
+            frame_data = self.processing_func(frame_data)
+
+        frame_data = np.squeeze(frame_data)
+        if (str(self.window_level_mode).lower() == 'displayed') and (self.levels is not None):
+            vmin, vmax = self.levels
+        else:
+            vmin = np.nanmin(frame_data)
+            vmax = np.nanmax(frame_data)
+
+        if vmax > vmin:
+            normalized = (frame_data - vmin) / (vmax - vmin)
+        else:
+            normalized = np.zeros_like(frame_data)
+
+        frame_uint8 = np.clip(normalized * 255, 0, 255).astype(np.uint8)
+        frame_rgb = self._colorize_frame(frame_uint8)
+        frame_rgb = self._orient_rgb_frame(frame_rgb)
+
+        mask_frame = self._mask_frame(frame_slice, frame_rgb.shape[:2])
+        frame_rgb = self._composite_mask(frame_rgb, mask_frame)
+        return self._apply_pixel_ratio(frame_rgb)
+
+    def _colorize_frame(self, frame_uint8):
+        lut = getattr(self, 'lut', None)
+        if frame_uint8.ndim == 2 and lut is not None:
+            try:
+                lut_arr = np.asarray(lut)
+                if lut_arr.shape[1] >= 3:
+                    lut_rgb = np.asarray(lut_arr[:, :3], dtype=np.uint8)
+                    return lut_rgb[frame_uint8]
+            except Exception:
+                pass
+
+        if frame_uint8.ndim == 2:
+            return np.stack([frame_uint8] * 3, axis=2)
+        return frame_uint8
+
+    def _orient_rgb_frame(self, frame_rgb):
+        if self.transpose:
+            frame_rgb = np.transpose(frame_rgb, (1, 0, 2))
+        return self._apply_axis_flips(frame_rgb)
+
+    def _apply_axis_flips(self, frame):
+        try:
+            primary = self.selected_indices[0]
+            if not self.axis_flipped[primary]:
+                frame = np.flipud(frame)
+            secondary = self.selected_indices[1]
+            if self.axis_flipped[secondary]:
+                frame = np.fliplr(frame)
+        except Exception:
+            pass
+        return frame
+
+    def _mask_frame(self, frame_slice, image_shape):
+        if not self.mask_enabled or self.mask_data is None or self.mask_lut is None:
+            return None
+
+        mask_frame = np.squeeze(self.mask_data[frame_slice])
+        if mask_frame.ndim != 2:
+            shape_before_orientation = tuple(reversed(image_shape)) if self.transpose else image_shape
+            mask_frame = np.broadcast_to(mask_frame, shape_before_orientation)
+        if self.transpose:
+            mask_frame = np.transpose(mask_frame)
+        return self._apply_axis_flips(mask_frame)
+
+    def _composite_mask(self, frame_rgb, mask_frame):
+        if mask_frame is None:
+            return frame_rgb
+
+        mask_lut = np.asarray(self.mask_lut)
+        if mask_lut.ndim != 2 or mask_lut.shape[1] < 3:
+            return frame_rgb
+
+        mask_indices = np.asarray(mask_frame, dtype=np.intp)
+        valid = (mask_indices >= 0) & (mask_indices < len(mask_lut))
+        clipped = np.clip(mask_indices, 0, len(mask_lut) - 1)
+        mask_rgba = mask_lut[clipped]
+        mask_rgb = np.asarray(mask_rgba[..., :3], dtype=np.float32)
+        if mask_rgba.shape[-1] >= 4:
+            alpha = np.asarray(mask_rgba[..., 3], dtype=np.float32) / 255.0
+        else:
+            alpha = (mask_indices != 0).astype(np.float32)
+        alpha = alpha * self.mask_opacity * valid.astype(np.float32)
+        alpha = alpha[..., np.newaxis]
+
+        frame_float = frame_rgb.astype(np.float32)
+        blended = frame_float * (1.0 - alpha) + mask_rgb * alpha
+        return np.clip(np.rint(blended), 0, 255).astype(np.uint8)
     
     def _save_gif(self, frames):
         """Save frames as GIF using PIL"""
@@ -448,12 +482,19 @@ class VideoExportDialog(QtWidgets.QDialog):
 class VideoExportSettingsDialog(QtWidgets.QDialog):
     """Dialog to configure export settings"""
     
-    def __init__(self, parent=None, export_dim=None, data_shape=None):
+    def __init__(self, parent=None, export_dim=None, data_shape=None,
+                 has_mask=False, mask_visible=False, mask_opacity=0.5):
         super().__init__(parent)
         self.setWindowTitle("Export Video Settings")
         self.setModal(True)
         self.export_dim = export_dim
         self.data_shape = data_shape
+        self.has_mask = bool(has_mask)
+        self.mask_visible = bool(mask_visible)
+        self.mask_opacity = max(0.0, min(float(mask_opacity), 1.0))
+        self.mask_checkbox = None
+        self.mask_opacity_slider = None
+        self.mask_opacity_label = None
         self.setup_ui()
     
     def setup_ui(self):
@@ -522,6 +563,26 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         self.wl_combo.addItem("Rescale", "rescale")
         wl_layout.addWidget(self.wl_combo)
         layout.addLayout(wl_layout)
+
+        if self.has_mask:
+            mask_layout = QtWidgets.QHBoxLayout()
+            self.mask_checkbox = QtWidgets.QCheckBox("Mask")
+            self.mask_checkbox.setChecked(self.mask_visible)
+            self.mask_checkbox.toggled.connect(self._on_mask_toggled)
+            mask_layout.addWidget(self.mask_checkbox)
+
+            self.mask_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+            self.mask_opacity_slider.setRange(0, 100)
+            self.mask_opacity_slider.setValue(int(round(self.mask_opacity * 100)))
+            self.mask_opacity_slider.setFixedWidth(90)
+            self.mask_opacity_slider.valueChanged.connect(self._on_mask_opacity_changed)
+            mask_layout.addWidget(self.mask_opacity_slider)
+
+            self.mask_opacity_label = QtWidgets.QLabel(f"{int(round(self.mask_opacity * 100))}%")
+            self.mask_opacity_label.setMinimumWidth(36)
+            mask_layout.addWidget(self.mask_opacity_label)
+            layout.addLayout(mask_layout)
+            self._on_mask_toggled(self.mask_checkbox.isChecked())
         
         # Info
         info_text = f"Exporting dimension {self.export_dim} ({self.data_shape[self.export_dim]} frames)"
@@ -550,7 +611,13 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             'format': (self.format_combo.currentData() or 'gif'),
             'fps': self.fps_spinbox.value(),
             'pixel_ratio': self.ratio_combo.currentText().lower().replace(' ', '_'),
-            'window_level': (self.wl_combo.currentData() or 'displayed')
+            'window_level': (self.wl_combo.currentData() or 'displayed'),
+            'mask_enabled': bool(self.has_mask and self.mask_checkbox is not None and self.mask_checkbox.isChecked()),
+            'mask_opacity': (
+                float(self.mask_opacity_slider.value()) / 100.0
+                if self.has_mask and self.mask_opacity_slider is not None
+                else 0.0
+            ),
         }
 
     def _on_format_changed(self, *_args):
@@ -563,3 +630,13 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
                 self.fps_spinbox.setEnabled(True)
         except Exception:
             pass
+
+    def _on_mask_toggled(self, checked):
+        if self.mask_opacity_slider is not None:
+            self.mask_opacity_slider.setEnabled(bool(checked))
+        if self.mask_opacity_label is not None:
+            self.mask_opacity_label.setEnabled(bool(checked))
+
+    def _on_mask_opacity_changed(self, value):
+        if self.mask_opacity_label is not None:
+            self.mask_opacity_label.setText(f"{int(value)}%")

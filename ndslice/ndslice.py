@@ -2762,7 +2762,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             return
         
         # Get export settings from dialog
-        settings_dialog = VideoExportSettingsDialog(parent=self, export_dim=export_dim, data_shape=self.data.shape)
+        settings_dialog = VideoExportSettingsDialog(
+            parent=self,
+            export_dim=export_dim,
+            data_shape=self.data.shape,
+            has_mask=self.has_mask,
+            mask_visible=self._mask_visible,
+            mask_opacity=self._mask_opacity,
+        )
         if settings_dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         
@@ -2825,6 +2832,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     lut = cm.getLookupTable(0.0, 1.0, 256, alpha=False)
         except Exception:
             lut = None
+
+        mask_lut = None
+        if self.has_mask:
+            mask_lut = getattr(self.img_view, 'maskLookupTable', None)
+            if mask_lut is None:
+                mask_lut = self._mask_label_lookup_table()
         
         # Create worker thread
         worker = VideoExportWorker(
@@ -2845,7 +2858,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             display_mode=display_mode,
             widget_ratio=widget_ratio,
             axis_flipped=self.axis_flipped,
-            lut=lut
+            lut=lut,
+            mask_data=self.mask_broadcast if self.has_mask else None,
+            mask_lut=mask_lut,
+            mask_enabled=settings.get('mask_enabled', False),
+            mask_opacity=settings.get('mask_opacity', self._mask_opacity),
         )
         
         # Show progress dialog
