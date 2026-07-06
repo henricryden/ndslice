@@ -273,11 +273,17 @@ class VideoExportWorker(QtCore.QThread):
                         self.output_path,
                         fps=self.fps,
                         codec='libx264',
-                        ffmpeg_params=['-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '23']
+                        pixelformat='yuv420p',
+                        ffmpeg_params=['-preset', 'medium', '-crf', '23']
                     )
                 except Exception:
                     # Try without explicit codec if libx264 isn't available
-                    writer = imageio.get_writer(self.output_path, fps=self.fps, ffmpeg_params=['-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '23'])
+                    writer = imageio.get_writer(
+                        self.output_path,
+                        fps=self.fps,
+                        pixelformat='yuv420p',
+                        ffmpeg_params=['-preset', 'medium', '-crf', '23'],
+                    )
             elif self.format_type == 'webm':
                 # WebM only supports VP8/VP9/AV1 — try VP9 then fall back to VP8
                 try:
