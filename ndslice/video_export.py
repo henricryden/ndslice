@@ -46,12 +46,13 @@ class VideoExportWorker(QtCore.QThread):
                  display_mode='square_pixels', widget_ratio=1.0, axis_flipped=None,
                  lut=None, window_level_mode='displayed', mask_data=None,
                  mask_lut=None, mask_enabled=False, mask_opacity=0.5,
-                 frame_start=0, frame_stop=None):
+                 frame_start=0, frame_stop=None, display_aspect_ratio=None):
         super().__init__()
         self.transpose = transpose
         self.pixel_ratio_mode = pixel_ratio_mode
         self.display_mode = display_mode
         self.widget_ratio = widget_ratio
+        self.display_aspect_ratio = display_aspect_ratio
         self.axis_flipped = axis_flipped or []
         self.lut = lut
         self.mask_data = mask_data
@@ -363,8 +364,12 @@ class VideoExportWorker(QtCore.QThread):
                 if dm == 'square_fov':
                     side = max(w, h)
                     target_w = target_h = side
+                elif dm == 'auto' and self.display_aspect_ratio is not None:
+                    pixel_ratio = self.display_aspect_ratio if self.display_aspect_ratio > 0 else 1.0
+                    ratio = (w / h) * pixel_ratio if h > 0 else pixel_ratio
+                    target_w = max(w, h)
+                    target_h = max(1, int(target_w / ratio))
                 elif dm in ('fit', 'auto'):
-                    # Match current widget aspect
                     ratio = self.widget_ratio if self.widget_ratio > 0 else 1.0
                     target_w = max(w, h)
                     target_h = max(1, int(target_w / ratio))
@@ -496,12 +501,14 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
     """Dialog to configure export settings"""
     
     def __init__(self, parent=None, export_dim=None, data_shape=None,
-                 has_mask=False, mask_visible=False, mask_opacity=0.5):
+                 has_mask=False, mask_visible=False, mask_opacity=0.5,
+                 preview_callback=None):
         super().__init__(parent)
         self.setWindowTitle("Export Video Settings")
         self.setModal(True)
         self.export_dim = export_dim
         self.data_shape = data_shape
+        self.preview_callback = preview_callback
         self.has_mask = bool(has_mask)
         self.mask_visible = bool(mask_visible)
         self.mask_opacity = max(0.0, min(float(mask_opacity), 1.0))
@@ -547,6 +554,11 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
                 if item is not None:
                     item.setEnabled(False)
 
+        if HAS_IMAGEIO:
+            mp4_index = self.format_combo.findData("mp4")
+            if mp4_index >= 0:
+                self.format_combo.setCurrentIndex(mp4_index)
+
         format_layout.addWidget(self.format_combo)
         # Disable/enable other options depending on chosen format
         self.format_combo.currentIndexChanged.connect(self._on_format_changed)
@@ -568,6 +580,7 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         ratio_layout.addWidget(QtWidgets.QLabel("Pixel ratio:"))
         self.ratio_combo = QtWidgets.QComboBox()
         self.ratio_combo.addItems(["Square pixels", "Square FOV", "Displayed"])
+        self.ratio_combo.setCurrentText("Displayed")
         ratio_layout.addWidget(self.ratio_combo)
         layout.addLayout(ratio_layout)
 
@@ -605,10 +618,12 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         )
         self.start_spinbox.valueChanged.connect(lambda _value: self._update_frame_count_label())
         self.end_spinbox.valueChanged.connect(lambda _value: self._update_frame_count_label())
+        self.start_spinbox.valueChanged.connect(self._preview_frame)
+        self.end_spinbox.valueChanged.connect(self._preview_frame)
         self.range_slider.valuesChanged.connect(self._sync_range_spinboxes)
         self.range_slider.setValues(0, max_index)
 
-        range_layout.addWidget(QtWidgets.QLabel("Range:"), 0, 0)
+        range_layout.addWidget(QtWidgets.QLabel("Slices:"), 0, 0)
         range_layout.addWidget(self.range_slider, 0, 1, 1, 4)
         range_layout.addWidget(QtWidgets.QLabel("start"), 1, 0)
         range_layout.addWidget(self.start_spinbox, 1, 1)
@@ -702,6 +717,8 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             self.mask_opacity_label.setText(f"{int(value)}%")
 
     def _sync_range_spinboxes(self, lower_value, upper_value):
+        old_lower = self.start_spinbox.value()
+        old_upper = self.end_spinbox.value()
         self.start_spinbox.blockSignals(True)
         self.end_spinbox.blockSignals(True)
         self.start_spinbox.setValue(lower_value)
@@ -709,6 +726,10 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         self.start_spinbox.blockSignals(False)
         self.end_spinbox.blockSignals(False)
         self._update_frame_count_label()
+        if lower_value != old_lower:
+            self._preview_frame(lower_value)
+        elif upper_value != old_upper:
+            self._preview_frame(upper_value)
 
     def _selected_frame_count(self):
         return max(0, self.end_spinbox.value() - self.start_spinbox.value() + 1)
@@ -718,3 +739,11 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             self.info_label.setText(
                 f"Exporting dimension {self.export_dim} ({self._selected_frame_count()} frames)"
             )
+
+    def _preview_frame(self, frame_idx):
+        if self.preview_callback is None:
+            return
+        try:
+            self.preview_callback(int(frame_idx))
+        except Exception:
+            pass

@@ -2608,6 +2608,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             has_mask=self.has_mask,
             mask_visible=self._mask_visible,
             mask_opacity=self._mask_opacity,
+            preview_callback=lambda frame_idx, dim=export_dim: self._preview_export_slice(dim, frame_idx),
         )
         if settings_dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
@@ -2704,11 +2705,22 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             mask_opacity=settings.get('mask_opacity', self._mask_opacity),
             frame_start=settings.get('frame_start', 0),
             frame_stop=settings.get('frame_stop', self.data.shape[export_dim]),
+            display_aspect_ratio=self._auto_display_aspect_ratio(),
         )
         
         # Show progress dialog
         progress_dialog = VideoExportDialog(self)
         progress_dialog.start_export(worker, worker.frame_count())
+
+    def _preview_export_slice(self, export_dim, frame_idx):
+        if export_dim < 0 or export_dim >= len(self.widgets['spins']['slice_indices']):
+            return
+        spinbox = self.widgets['spins']['slice_indices'][export_dim]
+        frame_idx = max(spinbox.minimum(), min(int(frame_idx), spinbox.maximum()))
+        if spinbox.value() == frame_idx:
+            self.update()
+        else:
+            spinbox.setValue(frame_idx)
 
     def _save_current_numpy_file(self):
         """Save the currently displayed array state to a NumPy .npy file."""
