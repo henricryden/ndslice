@@ -44,6 +44,7 @@ SUPPORTED_DISPLAY_MODES = (
 DISPLAY_MODE_ALIASES = {
     "fit": "auto",
 }
+DEFAULT_MASK_OPACITY = 0.8
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class ViewerConfig:
     default_colormap: str = DEFAULT_COLORMAP
     angle_colormap: str = ANGLE_COLORMAP_SAME
     default_display_mode: str = DEFAULT_DISPLAY_MODE
+    default_mask_opacity: float = DEFAULT_MASK_OPACITY
 
 
 def get_config_path():
@@ -113,6 +115,10 @@ def load_config(path=None, colormap_names=None):
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 
+    default_mask_opacity = _clean_mask_opacity(
+        display.get("default_mask_opacity", DEFAULT_MASK_OPACITY)
+    )
+
     return ViewerConfig(
         initial_index=initial_index,
         default_slice=default_slice,
@@ -121,6 +127,7 @@ def load_config(path=None, colormap_names=None):
         default_colormap=default_colormap,
         angle_colormap=angle_colormap,
         default_display_mode=default_display_mode,
+        default_mask_opacity=default_mask_opacity,
     )
 
 
@@ -164,6 +171,8 @@ def save_config(config, path=None, colormap_names=None):
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 
+    default_mask_opacity = _clean_mask_opacity(config.default_mask_opacity)
+
     text = (
         "[startup]\n"
         f'initial_index = "{initial_index}"\n'
@@ -175,6 +184,7 @@ def save_config(config, path=None, colormap_names=None):
         f'default_colormap = "{default_colormap}"\n'
         f'angle_colormap = "{angle_colormap}"\n'
         f'default_display_mode = "{default_display_mode}"\n'
+        f"default_mask_opacity = {default_mask_opacity:.6g}\n"
     )
     config_path.write_text(text, encoding="utf-8")
 
@@ -183,3 +193,13 @@ def update_config(path=None, colormap_names=None, **changes):
     config = replace(load_config(path, colormap_names=colormap_names), **changes)
     save_config(config, path, colormap_names=colormap_names)
     return config
+
+
+def _clean_mask_opacity(value):
+    try:
+        opacity = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MASK_OPACITY
+    if not 0.0 <= opacity <= 1.0:
+        return DEFAULT_MASK_OPACITY
+    return opacity

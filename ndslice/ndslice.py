@@ -17,6 +17,7 @@ from .config import (
     DEFAULT_CHANNEL,
     DEFAULT_COLORMAP, 
     DEFAULT_DISPLAY_MODE, 
+    DEFAULT_MASK_OPACITY,
     DEFAULT_ORIGIN,
     DEFAULT_SLICE_FIRST,
     DEFAULT_SLICE_LAST,
@@ -499,9 +500,6 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             if self.has_mask
             else None
         )
-        self._mask_visible = self.has_mask
-        self._mask_opacity = 0.8
-        self._mask_color_mode_index = MASK_COLOR_MODES.index("Rainbow")
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
         self._has_voxel_spacing_metadata = voxel_spacing is not None
         self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
@@ -512,6 +510,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         #         print(f"  dim {dim} ({label}, size {data.shape[dim]}): {spacing}")
         self._config_path = config_path
         self._viewer_config = load_config(config_path, colormap_names=COLORMAP_NAMES)
+        self._mask_visible = self.has_mask
+        self._mask_opacity = self._viewer_config.default_mask_opacity
+        self._mask_color_mode_index = MASK_COLOR_MODES.index("Rainbow")
         self.current_colormap = DEFAULT_COLORMAP
         self.singleton = [e == 1 for e in list(data.shape)]
         self.selected_indices = []
@@ -1267,6 +1268,30 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         display_action.setDefaultWidget(display_row)
         menu.addAction(display_action)
 
+        mask_opacity_row = QtWidgets.QWidget(menu)
+        mask_opacity_layout = QtWidgets.QHBoxLayout()
+        mask_opacity_layout.setContentsMargins(8, 4, 8, 4)
+        mask_opacity_layout.setSpacing(8)
+
+        mask_opacity_label = QtWidgets.QLabel("Default mask opacity")
+        self._default_mask_opacity_spinbox = QtWidgets.QSpinBox(mask_opacity_row)
+        self._default_mask_opacity_spinbox.setRange(0, 100)
+        self._default_mask_opacity_spinbox.setSuffix("%")
+        self._default_mask_opacity_spinbox.setValue(
+            int(round(self._viewer_config.default_mask_opacity * 100))
+        )
+        self._default_mask_opacity_spinbox.valueChanged.connect(
+            self._on_default_mask_opacity_changed
+        )
+
+        mask_opacity_layout.addWidget(mask_opacity_label)
+        mask_opacity_layout.addWidget(self._default_mask_opacity_spinbox)
+        mask_opacity_row.setLayout(mask_opacity_layout)
+
+        mask_opacity_action = QtWidgets.QWidgetAction(menu)
+        mask_opacity_action.setDefaultWidget(mask_opacity_row)
+        menu.addAction(mask_opacity_action)
+
         button.setMenu(menu)
         return button
 
@@ -1420,6 +1445,28 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         )
         self._save_viewer_config()
         self._set_display_mode(display_mode)
+
+    def _on_default_mask_opacity_changed(self, value):
+        opacity = max(0.0, min(float(value) / 100.0, 1.0))
+        self._viewer_config = replace(
+            self._viewer_config,
+            default_mask_opacity=opacity,
+        )
+        self._save_viewer_config()
+        self._set_mask_opacity(opacity)
+
+    def _set_mask_opacity(self, opacity):
+        self._mask_opacity = max(0.0, min(float(opacity), 1.0))
+        value = int(round(self._mask_opacity * 100))
+
+        if hasattr(self, 'mask_opacity_slider'):
+            self.mask_opacity_slider.blockSignals(True)
+            self.mask_opacity_slider.setValue(value)
+            self.mask_opacity_slider.blockSignals(False)
+        if hasattr(self, 'mask_opacity_label'):
+            self.mask_opacity_label.setText(f"{value}%")
+        if hasattr(self, 'img_view'):
+            self.img_view.setMaskOpacity(self._mask_opacity)
 
     def _save_viewer_config(self):
         try:
