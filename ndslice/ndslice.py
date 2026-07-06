@@ -2702,11 +2702,13 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             mask_lut=mask_lut,
             mask_enabled=settings.get('mask_enabled', False),
             mask_opacity=settings.get('mask_opacity', self._mask_opacity),
+            frame_start=settings.get('frame_start', 0),
+            frame_stop=settings.get('frame_stop', self.data.shape[export_dim]),
         )
         
         # Show progress dialog
         progress_dialog = VideoExportDialog(self)
-        progress_dialog.start_export(worker, self.data.shape[export_dim])
+        progress_dialog.start_export(worker, worker.frame_count())
 
     def _save_current_numpy_file(self):
         """Save the currently displayed array state to a NumPy .npy file."""

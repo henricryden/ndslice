@@ -1,6 +1,7 @@
 import numpy as np
 import os
 from pyqtgraph.Qt import QtWidgets, QtCore, QtGui
+from .range_slider import RangeSlider
 
 # Compatibility for PyQt5/PySide6 signal naming
 try:
@@ -44,7 +45,8 @@ class VideoExportWorker(QtCore.QThread):
                  singleton, levels=None, transpose=False, pixel_ratio_mode='square_pixels',
                  display_mode='square_pixels', widget_ratio=1.0, axis_flipped=None,
                  lut=None, window_level_mode='displayed', mask_data=None,
-                 mask_lut=None, mask_enabled=False, mask_opacity=0.5):
+                 mask_lut=None, mask_enabled=False, mask_opacity=0.5,
+                 frame_start=0, frame_stop=None):
         super().__init__()
         self.transpose = transpose
         self.pixel_ratio_mode = pixel_ratio_mode
@@ -68,24 +70,29 @@ class VideoExportWorker(QtCore.QThread):
         self.singleton = singleton
         self.levels = levels
         self.window_level_mode = (window_level_mode or 'displayed')
+        data_frame_count = self.data.shape[self.export_dim]
+        self.frame_start = max(0, min(int(frame_start), data_frame_count - 1))
+        self.frame_stop = data_frame_count if frame_stop is None else int(frame_stop)
+        self.frame_stop = max(self.frame_start + 1, min(self.frame_stop, data_frame_count))
         self._is_running = True
         
     def run(self):
         """Main export routine"""
         try:
-            total_frames = self.data.shape[self.export_dim]
+            frame_indices = list(self._frame_indices())
+            total_frames = len(frame_indices)
             frames = []
             
             # Generate all frames first to compute consistent levels if needed
-            for frame_idx in range(total_frames):
+            for progress_idx, frame_idx in enumerate(frame_indices, start=1):
                 if not self._is_running:
                     self.export_finished.emit(False, "Export cancelled")
                     return
 
                 frames.append(self._render_frame(frame_idx))
                 
-                status = f"Processing frame {frame_idx + 1}/{total_frames}"
-                self.progress_updated.emit(frame_idx + 1, status)
+                status = f"Processing frame {progress_idx}/{total_frames}"
+                self.progress_updated.emit(progress_idx, status)
             
             # Save video file
             self.progress_updated.emit(total_frames, "Encoding video...")
@@ -103,6 +110,12 @@ class VideoExportWorker(QtCore.QThread):
             
         except Exception as e:
             self.export_finished.emit(False, f"Export failed: {str(e)}")
+
+    def _frame_indices(self):
+        return range(self.frame_start, self.frame_stop)
+
+    def frame_count(self):
+        return max(0, self.frame_stop - self.frame_start)
 
     def _render_frame(self, frame_idx):
         frame_slice = list(self.slice_indices)
@@ -495,6 +508,10 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         self.mask_checkbox = None
         self.mask_opacity_slider = None
         self.mask_opacity_label = None
+        self.range_slider = None
+        self.start_spinbox = None
+        self.end_spinbox = None
+        self.info_label = None
         self.setup_ui()
     
     def setup_ui(self):
@@ -564,6 +581,47 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         wl_layout.addWidget(self.wl_combo)
         layout.addLayout(wl_layout)
 
+        range_layout = QtWidgets.QGridLayout()
+        range_layout.setHorizontalSpacing(8)
+        range_layout.setVerticalSpacing(4)
+        max_index = max(0, self.data_shape[self.export_dim] - 1)
+
+        self.range_slider = RangeSlider(self, 0, max_index)
+        self.start_spinbox = QtWidgets.QSpinBox()
+        self.end_spinbox = QtWidgets.QSpinBox()
+        for spinbox in (self.start_spinbox, self.end_spinbox):
+            spinbox.setRange(0, max_index)
+            spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spinbox.setFixedWidth(70)
+
+        self.end_spinbox.setValue(max_index)
+        self.start_spinbox.valueChanged.connect(lambda value: self.end_spinbox.setMinimum(value))
+        self.end_spinbox.valueChanged.connect(lambda value: self.start_spinbox.setMaximum(value))
+        self.start_spinbox.valueChanged.connect(
+            lambda value: self.range_slider.setValues(value, self.end_spinbox.value())
+        )
+        self.end_spinbox.valueChanged.connect(
+            lambda value: self.range_slider.setValues(self.start_spinbox.value(), value)
+        )
+        self.start_spinbox.valueChanged.connect(lambda _value: self._update_frame_count_label())
+        self.end_spinbox.valueChanged.connect(lambda _value: self._update_frame_count_label())
+        self.range_slider.valuesChanged.connect(self._sync_range_spinboxes)
+        self.range_slider.setValues(0, max_index)
+
+        range_layout.addWidget(QtWidgets.QLabel("Range:"), 0, 0)
+        range_layout.addWidget(self.range_slider, 0, 1, 1, 4)
+        range_layout.addWidget(QtWidgets.QLabel("start"), 1, 0)
+        range_layout.addWidget(self.start_spinbox, 1, 1)
+        range_layout.addItem(
+            QtWidgets.QSpacerItem(24, 1, QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum),
+            1,
+            2,
+        )
+        range_layout.addWidget(QtWidgets.QLabel("end"), 1, 3)
+        range_layout.addWidget(self.end_spinbox, 1, 4)
+        range_layout.setColumnStretch(2, 1)
+        layout.addLayout(range_layout)
+
         if self.has_mask:
             mask_layout = QtWidgets.QHBoxLayout()
             self.mask_checkbox = QtWidgets.QCheckBox("Mask")
@@ -585,10 +643,10 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             self._on_mask_toggled(self.mask_checkbox.isChecked())
         
         # Info
-        info_text = f"Exporting dimension {self.export_dim} ({self.data_shape[self.export_dim]} frames)"
-        info_label = QtWidgets.QLabel(info_text)
-        info_label.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(info_label)
+        self.info_label = QtWidgets.QLabel()
+        self.info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(self.info_label)
+        self._update_frame_count_label()
         
         # Buttons
         button_layout = QtWidgets.QHBoxLayout()
@@ -612,6 +670,8 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             'fps': self.fps_spinbox.value(),
             'pixel_ratio': self.ratio_combo.currentText().lower().replace(' ', '_'),
             'window_level': (self.wl_combo.currentData() or 'displayed'),
+            'frame_start': self.start_spinbox.value(),
+            'frame_stop': self.end_spinbox.value() + 1,
             'mask_enabled': bool(self.has_mask and self.mask_checkbox is not None and self.mask_checkbox.isChecked()),
             'mask_opacity': (
                 float(self.mask_opacity_slider.value()) / 100.0
@@ -640,3 +700,21 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
     def _on_mask_opacity_changed(self, value):
         if self.mask_opacity_label is not None:
             self.mask_opacity_label.setText(f"{int(value)}%")
+
+    def _sync_range_spinboxes(self, lower_value, upper_value):
+        self.start_spinbox.blockSignals(True)
+        self.end_spinbox.blockSignals(True)
+        self.start_spinbox.setValue(lower_value)
+        self.end_spinbox.setValue(upper_value)
+        self.start_spinbox.blockSignals(False)
+        self.end_spinbox.blockSignals(False)
+        self._update_frame_count_label()
+
+    def _selected_frame_count(self):
+        return max(0, self.end_spinbox.value() - self.start_spinbox.value() + 1)
+
+    def _update_frame_count_label(self):
+        if self.info_label is not None:
+            self.info_label.setText(
+                f"Exporting dimension {self.export_dim} ({self._selected_frame_count()} frames)"
+            )
