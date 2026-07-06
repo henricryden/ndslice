@@ -60,7 +60,7 @@ class ImageView2D(QtWidgets.QWidget):
 
         self.maskImageItem = ImageItem()
         self.maskImageItem.setZValue(10)
-        self.maskImageItem.setOpacity(0.5)
+        self.maskImageItem.setOpacity(0.8)
         self.maskImageItem.setVisible(False)
         self.view.addItem(self.maskImageItem, ignoreBounds=True)
         

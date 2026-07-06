@@ -7,6 +7,7 @@ import math
 import platform
 from dataclasses import replace
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from .imageview2d import ImageView2D
 from .range_slider import RangeSlider
@@ -42,6 +43,13 @@ COLORMAP_NAMES = (
     "d3-cool",
     "d3-warm",
 )
+
+
+def _package_version():
+    try:
+        return version("ndslice")
+    except PackageNotFoundError:
+        return "0+unknown"
 MASK_LABEL_MIN = 0
 MASK_LABEL_MAX = 32
 MASK_SOLID_COLOR_MODES = ("R", "G", "B", "C", "M", "Y")
@@ -492,7 +500,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             else None
         )
         self._mask_visible = self.has_mask
-        self._mask_opacity = 0.5
+        self._mask_opacity = 0.8
         self._mask_color_mode_index = MASK_COLOR_MODES.index("Rainbow")
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
         self._has_voxel_spacing_metadata = voxel_spacing is not None
@@ -1037,7 +1045,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def _create_settings_button(self):
         button = QtWidgets.QToolButton(self)
         button.setText("⚙")
-        button.setToolTip("Settings")
+        button.setToolTip(f"Settings (ndslice {_package_version()})")
         button.setAutoRaise(True)
         button.setFixedSize(28, 24)
         button.setStyleSheet("QToolButton { font-size: 15pt; padding: 0px; margin: 0px; }")
