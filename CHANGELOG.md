@@ -1,6 +1,20 @@
 # Changelog
 
 
+## [0.9.0]
+
+### Added
+- **Mask overlays** — Added mask overlays from Python (`mask=`) and CLI (`--mask`).
+- **Video export ranges** — Added start/end slice selection.
+
+### Changed
+- Video export now defaults to MP4 when available and uses the displayed aspect ratio by default.
+- Settings tooltip shows ndslice version.
+
+### Fixed
+- Restored `ndslice.__version__` from package metadata.
+- Removed duplicate MP4 `-pix_fmt` ffmpeg warning.
+
 
 ## [0.8.0]
 
