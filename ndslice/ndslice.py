@@ -41,6 +41,32 @@ COLORMAP_NAMES = (
     "d3-cool",
     "d3-warm",
 )
+MASK_LABEL_MIN = 0
+MASK_LABEL_MAX = 32
+MASK_SOLID_COLOR_MODES = ("R", "G", "B", "C", "M", "Y")
+MASK_COLOR_MODES = MASK_SOLID_COLOR_MODES + ("Rainbow",)
+MASK_COLOR_RGB = {
+    "R": (255, 0, 0),
+    "G": (0, 255, 0),
+    "B": (0, 0, 255),
+    "C": (0, 255, 255),
+    "M": (255, 0, 255),
+    "Y": (255, 255, 0),
+}
+MASK_SIMPLE_RAINBOW_RGB = np.array(
+    [MASK_COLOR_RGB[color] for color in ("R", "G", "B", "C", "M", "Y")],
+    dtype=np.ubyte,
+)
+MASK_GLASBEY_RGB = np.array([
+    (206, 36, 0), (20, 89, 255), (0, 113, 0), (243, 109, 255),
+    (105, 0, 105), (170, 251, 0), (0, 194, 170), (255, 162, 53),
+    (93, 61, 4), (0, 28, 101), (0, 85, 77), (154, 125, 130),
+    (158, 150, 255), (158, 178, 109), (174, 0, 255), (77, 0, 20),
+    (255, 182, 210), (202, 0, 162), (93, 255, 174), (0, 45, 0),
+    (158, 117, 0), (61, 53, 65), (243, 235, 146), (97, 101, 138),
+    (138, 61, 77), (89, 4, 186), (89, 134, 109), (170, 182, 194),
+    (255, 93, 130), (0, 194, 0), (146, 247, 255), (0, 150, 194),
+], dtype=np.ubyte)
 
 try:
     from IPython import get_ipython
@@ -231,6 +257,42 @@ class RangeSlider(QtWidgets.QWidget):
             self.setValues(min(value, self._upper_value), self._upper_value)
         elif self._active_handle == 'upper':
             self.setValues(self._lower_value, max(value, self._lower_value))
+
+
+class MaskColorSwatch(QtWidgets.QWidget):
+    clicked = QT_SIGNAL()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._colors = [MASK_COLOR_RGB["R"]]
+        self.setFixedSize(28, 16)
+        self.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+
+    def setColors(self, colors):
+        self._colors = list(colors) or [MASK_COLOR_RGB["R"]]
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.QtCore.Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        event.ignore()
+
+    def paintEvent(self, event):
+        del event
+        painter = QtGui.QPainter(self)
+        width = self.width() / len(self._colors)
+        for index, color in enumerate(self._colors):
+            painter.setPen(Qt.QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(int(color[0]), int(color[1]), int(color[2])))
+            left = int(round(index * width))
+            right = int(round((index + 1) * width))
+            painter.drawRect(left, 0, max(1, right - left), self.height())
+
+        painter.setBrush(Qt.QtCore.Qt.BrushStyle.NoBrush)
+        painter.setPen(QtGui.QColor(90, 90, 90))
+        painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
 
 
 class SaveRangeDialog(QtWidgets.QDialog):
@@ -432,6 +494,112 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 spacing[dim] = value
         return spacing
 
+    @staticmethod
+    def _normalize_mask(mask, data_shape):
+        if mask is None:
+            return None, np.array([], dtype=np.uint8)
+
+        if not isinstance(mask, np.ndarray):
+            raise TypeError("mask must be a numpy array")
+
+        data_shape = tuple(data_shape)
+        if mask.ndim < 1:
+            raise ValueError("mask must have at least 1 dimension")
+        if mask.ndim > len(data_shape):
+            raise ValueError(
+                f"mask shape {mask.shape} has more dimensions than data shape {data_shape}"
+            )
+
+        mask_shape = NDSliceWindow._broadcast_mask_shape(mask.shape, data_shape)
+
+        normalized_mask = NDSliceWindow._mask_as_uint8(mask)
+        mask_labels = NDSliceWindow._mask_labels_from_normalized(normalized_mask)
+        return normalized_mask.reshape(mask_shape), mask_labels
+
+    @staticmethod
+    def _broadcast_mask_shape(mask_shape, data_shape):
+        mask_shape = tuple(mask_shape)
+        data_shape = tuple(data_shape)
+        trailing_shape = mask_shape + (1,) * (len(data_shape) - len(mask_shape))
+        if NDSliceWindow._is_mask_shape_compatible(trailing_shape, data_shape):
+            return trailing_shape
+
+        for start_dim in range(len(data_shape) - len(mask_shape) + 1):
+            candidate = (
+                (1,) * start_dim
+                + mask_shape
+                + (1,) * (len(data_shape) - len(mask_shape) - start_dim)
+            )
+            if NDSliceWindow._is_mask_shape_compatible(candidate, data_shape):
+                return candidate
+
+        details = NDSliceWindow._mask_shape_error_details(trailing_shape, data_shape)
+        raise ValueError(
+            f"mask shape {mask_shape} is not broadcast-compatible with data shape {data_shape} ({details})"
+        )
+
+    @staticmethod
+    def _is_mask_shape_compatible(mask_shape, data_shape):
+        return all(
+            mask_size in (1, data_size)
+            for mask_size, data_size in zip(mask_shape, data_shape)
+        )
+
+    @staticmethod
+    def _mask_shape_error_details(mask_shape, data_shape):
+        incompatible = [
+            (dim, mask_size, data_size)
+            for dim, (mask_size, data_size) in enumerate(zip(mask_shape, data_shape))
+            if mask_size not in (1, data_size)
+        ]
+        return ", ".join(
+            f"dim {dim}: mask {mask_size}, data {data_size}"
+            for dim, mask_size, data_size in incompatible
+        )
+
+    @staticmethod
+    def _mask_as_uint8(mask):
+        is_numeric = np.issubdtype(mask.dtype, np.number) or np.issubdtype(mask.dtype, np.bool_)
+        if not is_numeric or np.iscomplexobj(mask):
+            raise TypeError(f"mask must contain finite integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            normalized_mask = mask.astype(np.uint8, copy=False)
+
+        if not np.all(mask == normalized_mask):
+            NDSliceWindow._raise_mask_value_error(mask)
+        return normalized_mask
+
+    @staticmethod
+    def _raise_mask_value_error(mask):
+        if not np.all(np.isfinite(mask)):
+            raise ValueError(f"mask must contain finite integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
+        if not np.all(np.equal(mask, np.round(mask))):
+            raise ValueError(f"mask must contain integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
+        min_label = int(np.min(mask)) if mask.size else MASK_LABEL_MIN
+        max_label = int(np.max(mask)) if mask.size else MASK_LABEL_MIN
+        raise ValueError(
+            f"mask labels must be in the range {MASK_LABEL_MIN}..{MASK_LABEL_MAX}; "
+            f"got {min_label}..{max_label}"
+        )
+
+    @staticmethod
+    def _mask_labels_from_normalized(normalized_mask):
+        flat_mask = np.ravel(normalized_mask)
+        if flat_mask.size == 0:
+            return np.array([], dtype=np.uint8)
+
+        counts = np.bincount(flat_mask)
+        if len(counts) > MASK_LABEL_MAX + 1 and np.any(counts[MASK_LABEL_MAX + 1:]):
+            present_labels = np.flatnonzero(counts)
+            raise ValueError(
+                f"mask labels must be in the range {MASK_LABEL_MIN}..{MASK_LABEL_MAX}; "
+                f"got {int(present_labels[0])}..{int(present_labels[-1])}"
+            )
+
+        return np.flatnonzero(counts[:MASK_LABEL_MAX + 1]).astype(np.uint8, copy=False)
+
     def _dimension_display_name(self, dim):
         label = self.dim_labels[dim]
         return f"{dim}: {label}" if label else str(dim)
@@ -471,11 +639,22 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
                  selector_class_name=None, config_path=None, dim_labels=None,
-                 voxel_spacing=None):
+                 voxel_spacing=None, mask=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
+        self.mask_data, self.mask_labels = self._normalize_mask(mask, data.shape)
+        self.mask_positive_labels = self.mask_labels[self.mask_labels > 0]
+        self.has_mask = self.mask_data is not None
+        self.mask_broadcast = (
+            np.broadcast_to(self.mask_data, data.shape)
+            if self.has_mask
+            else None
+        )
+        self._mask_visible = self.has_mask
+        self._mask_opacity = 0.5
+        self._mask_color_mode_index = MASK_COLOR_MODES.index("Rainbow")
         self.dim_labels = self._clean_dim_labels(dim_labels, data.ndim)
         self._has_voxel_spacing_metadata = voxel_spacing is not None
         self.voxel_spacing = self._clean_voxel_spacing(voxel_spacing, data.ndim)
@@ -751,6 +930,38 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         self.display_group.setLayout(display_layout)
         controls_layout.addWidget(self.display_group)
+
+        self.mask_group = QtWidgets.QGroupBox("Mask")
+        self.mask_group.setStyleSheet(self.GROUPBOX_BASE_STYLE)
+        mask_layout = QtWidgets.QHBoxLayout()
+        mask_layout.setSpacing(5)
+        mask_layout.setContentsMargins(3, 3, 3, 3)
+
+        self.mask_visible_checkbox = QtWidgets.QCheckBox("Visible")
+        self.mask_visible_checkbox.setStyleSheet(self.RADIO_BUTTON_STYLE)
+        self.mask_visible_checkbox.setChecked(self._mask_visible)
+        self.mask_visible_checkbox.toggled.connect(self._on_mask_visibility_changed)
+        mask_layout.addWidget(self.mask_visible_checkbox)
+
+        self.mask_opacity_slider = QtWidgets.QSlider(Qt.QtCore.Qt.Orientation.Horizontal)
+        self.mask_opacity_slider.setRange(0, 100)
+        self.mask_opacity_slider.setValue(int(round(self._mask_opacity * 100)))
+        self.mask_opacity_slider.setFixedWidth(90)
+        self.mask_opacity_slider.valueChanged.connect(self._on_mask_opacity_changed)
+        mask_layout.addWidget(self.mask_opacity_slider)
+
+        self.mask_opacity_label = QtWidgets.QLabel(f"{int(round(self._mask_opacity * 100))}%")
+        self.mask_opacity_label.setMinimumWidth(36)
+        mask_layout.addWidget(self.mask_opacity_label)
+
+        self.mask_color_swatch = MaskColorSwatch()
+        self.mask_color_swatch.clicked.connect(self._cycle_mask_color_mode)
+        mask_layout.addWidget(self.mask_color_swatch)
+        self._update_mask_color_swatch()
+
+        self.mask_group.setLayout(mask_layout)
+        self.mask_group.setVisible(self.has_mask)
+        controls_layout.addWidget(self.mask_group)
         
         # Add stretch to push everything to the top
         controls_layout.addStretch()
@@ -766,6 +977,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.image_tab_layout = QtWidgets.QVBoxLayout()
         
         self.img_view = ImageView2D()
+        if self.has_mask:
+            self._apply_mask_color_mode()
+            self.img_view.setMaskOpacity(self._mask_opacity)
         self.image_tab_layout.addWidget(self.img_view)
         self.image_tab.setLayout(self.image_tab_layout)
         self.img_view.getView().scene().sigMouseMoved.connect(lambda pos: self.getPixel(pos))
@@ -1396,6 +1610,65 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         border_painter.end()
         return QtGui.QIcon(pixmap)
 
+    def _mask_color_mode(self):
+        return MASK_COLOR_MODES[self._mask_color_mode_index % len(MASK_COLOR_MODES)]
+
+    def _mask_mode_colors(self):
+        mode = self._mask_color_mode()
+        if mode == "Rainbow":
+            return [self._mask_rainbow_color(label) for label in self.mask_positive_labels]
+        return [MASK_COLOR_RGB[mode]]
+
+    def _mask_uses_simple_rainbow(self):
+        return (
+            len(self.mask_positive_labels) <= len(MASK_SIMPLE_RAINBOW_RGB)
+            and (
+                len(self.mask_positive_labels) == 0
+                or int(self.mask_positive_labels[-1]) <= len(MASK_SIMPLE_RAINBOW_RGB)
+            )
+        )
+
+    def _mask_rainbow_color(self, label):
+        label = int(label)
+        if label <= 0 or label > MASK_LABEL_MAX:
+            return (0, 0, 0)
+        palette = MASK_SIMPLE_RAINBOW_RGB if self._mask_uses_simple_rainbow() else MASK_GLASBEY_RGB
+        return tuple(int(value) for value in palette[label - 1])
+
+    def _mask_label_lookup_table(self):
+        lut = np.zeros((MASK_LABEL_MAX + 1, 4), dtype=np.ubyte)
+        mode = self._mask_color_mode()
+        if mode == "Rainbow":
+            for label in self.mask_positive_labels:
+                lut[int(label), :3] = self._mask_rainbow_color(label)
+        else:
+            lut[1:, :3] = np.array(MASK_COLOR_RGB[mode], dtype=np.ubyte)
+        lut[1:, 3] = 255
+        return lut
+
+    def _apply_mask_color_mode(self):
+        if self.has_mask is False:
+            return
+        if hasattr(self, 'img_view'):
+            self.img_view.setMaskLookupTable(self._mask_label_lookup_table())
+        self._update_mask_color_swatch()
+
+    def _cycle_mask_color_mode(self):
+        if self.has_mask is False:
+            return
+        self._mask_color_mode_index = (self._mask_color_mode_index + 1) % len(MASK_COLOR_MODES)
+        self._apply_mask_color_mode()
+
+    def _update_mask_color_swatch(self):
+        if hasattr(self, 'mask_color_swatch'):
+            self.mask_color_swatch.setColors(self._mask_mode_colors())
+            unique_count = len(getattr(self, 'mask_labels', ()))
+            positive_count = len(getattr(self, 'mask_positive_labels', ()))
+            self.mask_color_swatch.setToolTip(
+                f"Mask color: {self._mask_color_mode()}\n"
+                f"Unique mask values: {unique_count} ({positive_count} visible labels)"
+            )
+
 
     def dimClicked(self, event, label, dim):
         if self.singleton[dim]:
@@ -1645,6 +1918,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def getPixel(self, pos):
         img = self.img_view.image
+        if img is None:
+            return
         container = self.img_view.getView()
         if container.sceneBoundingRect().contains(pos): 
             mousePoint = container.mapSceneToView(pos) 
@@ -1653,9 +1928,26 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             if x_i >= 0 and x_i < img.shape [ 0 ] and y_i >= 0 and y_i < img.shape[1]:
                 decimal_places = getNumberOfDecimalPlaces(abs(img[x_i ,y_i]))
                 if decimal_places > 5:
-                    self.widgets['labels']['pixelValue'].setText("({}, {}) = {:.3e}".format (x_i, y_i, img[x_i ,y_i]))
+                    text = "({}, {}) = {:.3e}".format (x_i, y_i, img[x_i ,y_i])
                 else:
-                    self.widgets['labels']['pixelValue'].setText("({}, {}) = {:.{}f}".format (x_i, y_i, img[x_i ,y_i], decimal_places))
+                    text = "({}, {}) = {:.{}f}".format (x_i, y_i, img[x_i ,y_i], decimal_places)
+
+                mask_img = getattr(self.img_view, 'mask', None)
+                mask_item = getattr(self.img_view, 'maskImageItem', None)
+                if (
+                    mask_img is not None
+                    and mask_item is not None
+                    and mask_item.isVisible()
+                    and x_i < mask_img.shape[0]
+                    and y_i < mask_img.shape[1]
+                ):
+                    mask_value = mask_img[x_i, y_i]
+                    if np.isfinite(mask_value) and float(mask_value).is_integer():
+                        text += f" | mask = {int(mask_value)}"
+                    else:
+                        text += f" | mask = {mask_value:.3g}"
+
+                self.widgets['labels']['pixelValue'].setText(text)
 
     
     def update_image_view(self):
@@ -1724,6 +2016,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             # Final processing and display
             image_data = np.nan_to_num(np.squeeze(image_data))
             self.img_view.setImage(image_data, autoLevels=al, levels=prev_levels)
+            self._update_mask_image(image_data.shape)
             
             # Apply axis flips after setting the image
             self.apply_axis_flips()
@@ -1731,6 +2024,25 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             print(f'Image update failed: {e}')
+
+    def _update_mask_image(self, image_shape):
+        if self.has_mask is False:
+            self.img_view.clearMask()
+            return
+
+        mask_image_data = self.mask_broadcast[tuple(self.slice)]
+        if self.selected_indices[0] < self.selected_indices[1]:
+            mask_image_data = np.transpose(mask_image_data)
+        mask_image_data = np.nan_to_num(np.squeeze(mask_image_data))
+        if mask_image_data.ndim != 2:
+            mask_image_data = np.broadcast_to(mask_image_data, image_shape)
+
+        self.img_view.setMaskImage(
+            mask_image_data,
+            levels=(MASK_LABEL_MIN, MASK_LABEL_MAX),
+        )
+        self.img_view.setMaskOpacity(self._mask_opacity)
+        self.img_view.setMaskVisible(self._mask_visible)
     
     def update_display_mode(self):
         """Update the display mode for the image view"""
@@ -1788,6 +2100,19 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         # Force update to ensure view changes immediately
         self.update_image_view()
+
+    def _on_mask_visibility_changed(self, visible):
+        if self.has_mask is False:
+            return
+        self._mask_visible = bool(visible)
+        if hasattr(self, 'img_view'):
+            self.img_view.setMaskVisible(self._mask_visible)
+
+    def _on_mask_opacity_changed(self, value):
+        self._mask_opacity = max(0.0, min(float(value) / 100.0, 1.0))
+        self.mask_opacity_label.setText(f"{int(round(self._mask_opacity * 100))}%")
+        if hasattr(self, 'img_view'):
+            self.img_view.setMaskOpacity(self._mask_opacity)
 
     def _update_display_group_title(self):
         """Update the display group title with aspect ratio information."""
@@ -2661,13 +2986,32 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 selector_class_name=self._selector_class_name,
                                 config_path=self._config_path,
                                 dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
-                                voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing)
+                                voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
+                                mask=self.mask_data)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
+        if self.has_mask:
+            try:
+                self.mask_data, self.mask_labels = self._normalize_mask(self.mask_data, new_data.shape)
+                self.mask_positive_labels = self.mask_labels[self.mask_labels > 0]
+                self.mask_broadcast = np.broadcast_to(self.mask_data, new_data.shape)
+                self._update_mask_color_swatch()
+            except ValueError as e:
+                self.has_mask = False
+                self.mask_data = None
+                self.mask_labels = np.array([], dtype=np.uint8)
+                self.mask_positive_labels = self.mask_labels
+                self.mask_broadcast = None
+                self._mask_visible = False
+                if hasattr(self, 'mask_group'):
+                    self.mask_group.setVisible(False)
+                if hasattr(self, 'img_view'):
+                    self.img_view.clearMask()
+                QtWidgets.QMessageBox.warning(self, "Mask Disabled", str(e))
         self._has_voxel_spacing_metadata = voxel_spacing is not None or self._has_voxel_spacing_metadata
         self.voxel_spacing = self._clean_voxel_spacing(
             voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
@@ -2795,7 +3139,7 @@ def _retain_window_reference(app, win):
 
 def _create_window(data, title='', complex_dim=None, filepath=None,
                    dataset_path=None, selector_class_name=None, dim_labels=None,
-                   voxel_spacing=None):
+                   voxel_spacing=None, mask=None):
     _prepare_qt_environment()
 
     app = pg.mkQApp()
@@ -2805,7 +3149,8 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
                         dataset_path=dataset_path,
                         selector_class_name=selector_class_name,
                         dim_labels=dim_labels,
-                        voxel_spacing=voxel_spacing)
+                        voxel_spacing=voxel_spacing,
+                        mask=mask)
     win.setWindowTitle(title)
     win.show()
 
@@ -2813,7 +3158,7 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
 
 def _run_window(data, title='', complex_dim=None, filepath=None,
                 dataset_path=None, selector_class_name=None, dim_labels=None,
-                voxel_spacing=None):
+                voxel_spacing=None, mask=None):
     """Open a viewer window in this process and block on the Qt event loop."""
     try:
         app, win = _create_window(
@@ -2822,6 +3167,7 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
             selector_class_name=selector_class_name,
             dim_labels=dim_labels,
             voxel_spacing=voxel_spacing,
+            mask=mask,
         )
         return app.exec()
     except BaseException:
@@ -2831,7 +3177,7 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
 
 def _show_window_inline(data, title='', complex_dim=None, filepath=None,
                         dataset_path=None, selector_class_name=None, dim_labels=None,
-                        voxel_spacing=None):
+                        voxel_spacing=None, mask=None):
     """Open a viewer window in this process without starting app.exec()."""
     app, win = _create_window(
         data, title=title, complex_dim=complex_dim,
@@ -2839,6 +3185,7 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
         selector_class_name=selector_class_name,
         dim_labels=dim_labels,
         voxel_spacing=voxel_spacing,
+        mask=mask,
     )
 
     _retain_window_reference(app, win)
@@ -2847,7 +3194,7 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
 
 def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
             dataset_path=None, selector_class_name=None, dim_labels=None,
-            voxel_spacing=None):
+            voxel_spacing=None, mask=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
@@ -2859,6 +3206,7 @@ def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
         "selector_class_name": selector_class_name,
         "dim_labels": dim_labels,
         "voxel_spacing": voxel_spacing,
+        "mask": mask,
     }
 
     if block:

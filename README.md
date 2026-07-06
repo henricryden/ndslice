@@ -27,6 +27,8 @@ complex_data = mag * np.exp(1j * pha)
 ndslice(complex_data, title='3D Complex Gaussian')
 # Optional dimension labels:
 ndslice(data, dim_labels=["X", "Y", "Z"])
+# Optional mask overlay:
+ndslice(data, mask=mask_data)
 ```
 
 ![Showcase](docs/images/showcase.gif)
@@ -75,6 +77,9 @@ Click arrow icons (⬇️/⬆️ and ⬅️/➡️) next to dimension labels to 
 Default orientation is image-style (origin lower-left).
 Flip the primary axis for matrix-style (origin upper-left).
 
+**Mask overlay**
+Pass `mask=` to overlay a label volume on the main image. Mask values must be integer labels from `0` to `32`; label `0` is transparent, opacity is adjustable, and the small color swatch cycles between solid RGBCMY colors and a Glasbey rainbow palette for the labels present in the mask.
+
 **Non-blocking windows**
 
 By default, windows open in separate processes, allowing multiple simultaneous views:
@@ -100,6 +105,7 @@ cannot safely fork a child process. In that case:
 ```bash
 ndslice data.npy # Numpy file
 ndslice image.nii.gz
+ndslice image.nii.gz --mask mask.nii.gz
 ndslice image.dcm
 ndslice some_dicom_dir/ # Automatically attemps to form an nd-array from DICOM the files
 ndslice --help   # Show all options

@@ -31,8 +31,19 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
     )
     parser.add_argument('files', type=str, nargs='+', 
                         help='Path(s) to data files or DICOM directories')
+    parser.add_argument('--mask', type=str, default=None,
+                        help='Optional mask volume to overlay on a single main file')
     
     args = parser.parse_args()
+
+    mask_path = None
+    if args.mask is not None:
+        if len(args.files) != 1:
+            parser.error('--mask requires exactly one main file')
+
+        mask_path = Path(args.mask)
+        if not mask_path.exists():
+            parser.error(f'Mask file not found: {mask_path}')
     
     for file_arg in args.files:
         filepath = Path(file_arg)
@@ -50,18 +61,29 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
                 detected_format = loaded.metadata.get('detected_format')
                 if detected_format:
                     title = f"{title} [{detected_format}]"
+                mask_data = load_path(mask_path).data if mask_path is not None else None
                 ndslice(data=loaded.data, title=title, block=False, filepath=filepath,
                         dim_labels=loaded.metadata.get('dim_labels'),
-                        voxel_spacing=loaded.metadata.get('voxel_spacing'))
+                        voxel_spacing=loaded.metadata.get('voxel_spacing'),
+                        mask=mask_data)
                 continue
             
             # Multi-dataset formats - use selectors
             selector = None
             if suffix in ['.h5', '.hdf5']:
+                if mask_path is not None:
+                    print("--mask is not supported for multi-dataset main files yet")
+                    continue
                 selector = h5_selector_for_path(filepath)
             elif suffix == '.npz':
+                if mask_path is not None:
+                    print("--mask is not supported for multi-dataset main files yet")
+                    continue
                 selector = NpzDatasetSelector(filepath)
             elif suffix == '.mat':
+                if mask_path is not None:
+                    print("--mask is not supported for multi-dataset main files yet")
+                    continue
                 selector = MatDatasetSelector(filepath)
             else:
                 print(f"Unsupported file type: {suffix}. Supported types: directories with DICOM .dcm files, .h5, .hdf5, .npy, .npz, .mat, .REC, .cfl, .dcm, .nii, .nii.gz, .txt")

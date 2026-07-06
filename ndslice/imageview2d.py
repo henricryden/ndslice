@@ -31,6 +31,9 @@ class ImageView2D(QtWidgets.QWidget):
         
         self.image = None
         self.imageDisp = None
+        self.mask = None
+        self.maskDisp = None
+        self.maskLookupTable = None
         self.levelMin = None
         self.levelMax = None
         self.displayMode = 'square_pixels'  # Default to square pixels
@@ -54,6 +57,12 @@ class ImageView2D(QtWidgets.QWidget):
         else:
             self.imageItem = imageItem
         self.view.addItem(self.imageItem)
+
+        self.maskImageItem = ImageItem()
+        self.maskImageItem.setZValue(10)
+        self.maskImageItem.setOpacity(0.5)
+        self.maskImageItem.setVisible(False)
+        self.view.addItem(self.maskImageItem)
         
         # Setup histogram
         self.histogram.setImageItem(self.imageItem)
@@ -136,6 +145,7 @@ class ImageView2D(QtWidgets.QWidget):
         
         if transform is not None:
             self.imageItem.setTransform(transform)
+            self.maskImageItem.setTransform(transform)
             
         # Update aspect ratio based on display mode
         self._updateAspectRatio()
@@ -161,6 +171,39 @@ class ImageView2D(QtWidgets.QWidget):
         # Update histogram range if requested
         if autoHistogramRange:
             self.histogram.setHistogramRange(self.levelMin, self.levelMax)
+
+    def setMaskImage(self, img, levels=None):
+        if img is None:
+            self.clearMask()
+            return
+
+        if not isinstance(img, np.ndarray):
+            raise TypeError("Mask image must be a numpy array")
+
+        if img.ndim != 2:
+            raise ValueError("Mask image must be 2D")
+
+        self.mask = img
+        self.maskDisp = None
+        self.updateMaskImage()
+
+        if levels is None:
+            levels = (0, 32)
+        self.maskImageItem.setLevels(levels)
+
+        self.maskImageItem.setVisible(True)
+
+    def updateMaskImage(self):
+        if self.mask is None:
+            return
+
+        self.maskDisp = self.mask
+        self.maskImageItem.setImage(
+            self.maskDisp,
+            autoLevels=False,
+            lut=self.maskLookupTable,
+            levels=(0, 32),
+        )
             
     def autoRange(self):
         """Auto scale and pan the view to fit the image"""
@@ -178,7 +221,7 @@ class ImageView2D(QtWidgets.QWidget):
             else:
                 self.levelMin = 0.0
                 self.levelMax = 1.0
-                
+
     def autoLevels(self):
         """Automatically set the histogram levels based on image data"""
         if self.imageDisp is not None:
@@ -192,7 +235,7 @@ class ImageView2D(QtWidgets.QWidget):
     def getLevels(self):
         """Get the current histogram levels"""
         return self.histogram.getLevels()
-        
+
     def setHistogramRange(self, min_val, max_val):
         """Set the range of the histogram"""
         self.histogram.setHistogramRange(min_val, max_val)
@@ -222,6 +265,26 @@ class ImageView2D(QtWidgets.QWidget):
     def setColorMap(self, colormap):
         """Set the color map for the histogram"""
         self.histogram.gradient.setColorMap(colormap)
+
+    def setMaskLookupTable(self, lut):
+        self.maskLookupTable = lut
+        self.maskImageItem.setLookupTable(lut)
+        self.maskImageItem.setLevels((0, 32))
+        if self.mask is not None:
+            self.updateMaskImage()
+
+    def setMaskOpacity(self, opacity):
+        self.maskImageItem.setOpacity(float(opacity))
+
+    def setMaskVisible(self, visible):
+        has_mask = self.mask is not None
+        self.maskImageItem.setVisible(bool(visible) and has_mask)
+
+    def clearMask(self):
+        self.mask = None
+        self.maskDisp = None
+        self.maskImageItem.clear()
+        self.maskImageItem.setVisible(False)
         
     def setDisplayMode(self, mode, auto_aspect_ratio=None):
         """Set the display mode.
