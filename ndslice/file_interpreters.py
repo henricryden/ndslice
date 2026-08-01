@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 
+from .dicom_metadata import (
+    build_dicom_file_records,
+    find_dicom_files,
+    single_dicom_file_record,
+)
+
 
 @dataclass
 class LoadedPath:
@@ -347,23 +353,11 @@ class DicomLoader:
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
             'voxel_spacing': _dicom_pixel_voxel_spacing(pixel_spacing, data.ndim),
-            'dicom_metadata': {
-                'patient_name': str(getattr(dcm, 'PatientName', '')),
-                'series_description': str(getattr(dcm, 'SeriesDescription', '')),
-                'modality': str(getattr(dcm, 'Modality', '')),
-                'pixel_spacing': list(pixel_spacing) if pixel_spacing is not None else None,
-                'image_position_patient': list(getattr(dcm, 'ImagePositionPatient', [])) if hasattr(dcm, 'ImagePositionPatient') else None,
-            },
+            'spatial_unit': 'mm',
+            'dicom_file_count': 1,
+            'dicom_files': [single_dicom_file_record(self.dcm_path, dcm, data)],
         })
         return data
-
-
-def _find_dicom_files(directory_path):
-    directory_path = Path(directory_path)
-    return sorted(
-        path for path in directory_path.rglob('*')
-        if path.is_file() and path.suffix.lower() == '.dcm'
-    )
 
 
 def _json_sidecar_for_nifti(nifti_path):
@@ -458,7 +452,7 @@ class DicomDirectoryLoader:
             raise NotADirectoryError(f"Expected a directory, got: {self.directory_path}")
 
     def load(self):
-        dicom_files = _find_dicom_files(self.directory_path)
+        dicom_files = find_dicom_files(self.directory_path)
         if not dicom_files:
             raise ValueError(
                 f"No DICOM files with suffix .dcm were found under directory: {self.directory_path}"
@@ -472,6 +466,7 @@ class DicomDirectoryLoader:
             sidecar_metadata = []
             nifti_dim_labels = []
             nifti_voxel_spacings = []
+            nifti_affines = []
 
             for nifti_path, json_path in nifti_outputs:
                 nifti_loader = NiftiLoader(nifti_path)
@@ -481,6 +476,7 @@ class DicomDirectoryLoader:
                 sidecar_metadata.append(_read_json_sidecar(json_path))
                 nifti_dim_labels.append(nifti_loader.metadata.get('dim_labels', []))
                 nifti_voxel_spacings.append(nifti_loader.metadata.get('voxel_spacing', []))
+                nifti_affines.append(nifti_loader.metadata.get('affine'))
 
             if len(arrays) == 1:
                 data = arrays[0]
@@ -521,16 +517,31 @@ class DicomDirectoryLoader:
                 )
                 voxel_spacing = _append_voxel_spacing(base_voxel_spacing, None)
 
+            dicom_records = build_dicom_file_records(
+                dicom_files=dicom_files,
+                directory_path=self.directory_path,
+                output_shapes=[array.shape for array in arrays],
+                output_affines=nifti_affines,
+                output_metadata=sidecar_metadata,
+                final_shape=data.shape,
+                stacking_label=stacking_label,
+                stacking_values=stacking_values,
+            )
+
             self.metadata.update({
                 'shape': tuple(data.shape),
                 'dtype': str(data.dtype),
                 'dim_labels': dim_labels,
                 'voxel_spacing': voxel_spacing,
+                'spatial_unit': 'mm',
                 'nifti_output_path': nifti_paths[0] if len(nifti_paths) == 1 else nifti_paths,
                 'sidecar_json_path': json_paths[0] if len(json_paths) == 1 else json_paths,
                 'stacked_dimension': stacking_label,
                 'stacked_dimension_key': stacking_key,
                 'stacked_dimension_values': stacking_values,
+                'dicom_file_count': len(dicom_records),
+                'dicom_files': dicom_records,
+                'converted_output_names': [Path(path).name for path in nifti_paths],
             })
             return data
 
@@ -563,6 +574,7 @@ class NiftiLoader:
             'dtype': str(data.dtype),
             'dim_labels': _nifti_dim_labels(data.ndim),
             'voxel_spacing': _nifti_voxel_spacing(image.header.get_zooms(), data.ndim),
+            'affine': image.affine.tolist(),
         })
         return data
 

@@ -13,6 +13,7 @@ from .imageview2d import ImageView2D
 from .range_slider import RangeSlider
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
 from .metadata import MetadataDialog, build_metadata_model, clean_metadata
+from .dicom_dialog import DicomTagsDialog
 from .config import (
     ANGLE_COLORMAP_SAME,
     DEFAULT_CHANNEL,
@@ -537,6 +538,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             mask is not None,
         ))
         self._refresh_runtime_metadata()
+        self._dicom_dialog = None
+        self._dicom_last_path = None
         
         self.axis_flipped = [False] * data.ndim  # Track flip state so that one can toggle dims and come back to the same flip state
         
@@ -993,6 +996,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._metadata_btn = self._create_metadata_button()
         self.layouts['topUp'].addWidget(self._metadata_btn)
 
+        self._dicom_btn = self._create_dicom_button()
+        self.layouts['topUp'].addWidget(self._dicom_btn)
+
         self._settings_btn = self._create_settings_button()
         self.layouts['topUp'].addWidget(self._settings_btn)
 
@@ -1111,6 +1117,186 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def _show_metadata_dialog(self):
         dialog = MetadataDialog(self._metadata_dialog_model(), self)
         dialog.exec()
+
+    def _dicom_records(self):
+        records = self.metadata.get('dicom_files')
+        if not isinstance(records, list):
+            return []
+        return [record for record in records if isinstance(record, dict)]
+
+    def _record_dicom_inspection(self, path):
+        self._dicom_last_path = path
+
+    def _create_dicom_button(self):
+        button = QtWidgets.QToolButton(self)
+        icon = QtGui.QIcon.fromTheme("tag")
+        if icon.isNull():
+            button.setText("🏷")
+            self._set_emoji_font(button)
+        else:
+            button.setIcon(icon)
+        button.setToolTip("DICOM tags")
+        button.setAutoRaise(True)
+        button.setFixedSize(28, 24)
+        button.setStyleSheet("QToolButton { font-size: 14pt; padding: 0px; margin: 0px; }")
+        button.clicked.connect(self._show_dicom_dialog)
+        button.setVisible(bool(self._dicom_records()))
+        return button
+
+    @staticmethod
+    def _record_fixed_indices(record):
+        fixed_indices = {}
+        for pair in record.get('fixed_indices', []):
+            if not isinstance(pair, list) or len(pair) != 2:
+                continue
+            try:
+                fixed_indices[int(pair[0])] = int(pair[1])
+            except (TypeError, ValueError):
+                continue
+        return fixed_indices
+
+    def _exact_current_dicom_record_index(self, records):
+        displayed_dims = set()
+        if not self.is_line_plot_mode():
+            displayed_dims = set(self.selected_indices[:2])
+
+        matches = []
+        for index, record in enumerate(records):
+            if not record.get('navigable'):
+                continue
+            try:
+                in_plane_dims = {int(dim) for dim in record.get('in_plane_dims', [])}
+            except (TypeError, ValueError):
+                continue
+            if displayed_dims != in_plane_dims:
+                continue
+            fixed_indices = self._record_fixed_indices(record)
+            if all(
+                0 <= dim < len(self.widgets['spins']['slice_indices'])
+                and self.widgets['spins']['slice_indices'][dim].value() == value
+                for dim, value in fixed_indices.items()
+            ):
+                matches.append(index)
+
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _current_dicom_record_index(self, records):
+        exact_index = self._exact_current_dicom_record_index(records)
+        if exact_index is not None:
+            return exact_index, "Matched to the current ndslice plane"
+
+        if self._dicom_last_path is not None:
+            for index, record in enumerate(records):
+                if record.get('path') == self._dicom_last_path:
+                    return index, "No unique DICOM file for the current view; showing the last inspected file"
+
+        active_group = []
+        converted_outputs = self.metadata.get('converted_output_names')
+        stacked_output_dim = (
+            self.data.ndim - 1
+            if isinstance(converted_outputs, list) and len(converted_outputs) > 1
+            else None
+        )
+        for index, record in enumerate(records):
+            if not record.get('navigable'):
+                continue
+            fixed_indices = self._record_fixed_indices(record)
+            group_matches = (
+                stacked_output_dim is None
+                or fixed_indices.get(stacked_output_dim)
+                == self.widgets['spins']['slice_indices'][stacked_output_dim].value()
+            )
+            if group_matches:
+                active_group.append(index)
+
+        candidates = active_group or [
+            index for index, record in enumerate(records)
+            if record.get('navigable')
+        ]
+        if not candidates:
+            candidates = list(range(len(records)))
+        return (
+            candidates[len(candidates) // 2],
+            "No unique DICOM file for the current view; showing the middle file in the active group",
+        )
+
+    def _show_dicom_dialog(self):
+        records = self._dicom_records()
+        if not records:
+            return
+        if self._dicom_dialog is not None and self._dicom_dialog.isVisible():
+            exact_index = self._exact_current_dicom_record_index(records)
+            if exact_index is not None:
+                record = records[exact_index]
+                self._dicom_dialog.select_record_path(
+                    record.get('path'),
+                    "Matched to the current ndslice plane",
+                )
+            self._dicom_dialog.raise_()
+            self._dicom_dialog.activateWindow()
+            return
+
+        initial_index, status = self._current_dicom_record_index(records)
+        dialog = DicomTagsDialog(
+            self,
+            records,
+            initial_index,
+            status,
+            inspected_callback=self._record_dicom_inspection,
+            follow_callback=self._show_dicom_record_slice,
+        )
+        self._dicom_dialog = dialog
+
+        def clear_dialog_reference(_=None, expected=dialog):
+            if self._dicom_dialog is expected:
+                self._dicom_dialog = None
+
+        dialog.destroyed.connect(clear_dialog_reference)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _show_dicom_record_slice(self, record):
+        if not record.get('navigable'):
+            return False, str(record.get('navigation_reason') or 'This DICOM file is not navigable')
+
+        try:
+            in_plane_dims = [int(dim) for dim in record.get('in_plane_dims', [])]
+        except (TypeError, ValueError):
+            return False, "The DICOM plane dimensions are invalid"
+        if (
+            len(in_plane_dims) != 2
+            or len(set(in_plane_dims)) != 2
+            or any(dim < 0 or dim >= self.data.ndim for dim in in_plane_dims)
+            or any(self.singleton[dim] for dim in in_plane_dims)
+        ):
+            return False, "The DICOM plane does not map to two displayable ndarray dimensions"
+
+        fixed_indices = self._record_fixed_indices(record)
+        for dim, value in fixed_indices.items():
+            if dim < 0 or dim >= self.data.ndim or value < 0 or value >= self.data.shape[dim]:
+                return False, "A mapped DICOM index is outside the current ndarray"
+
+        if self.tab_widget.currentIndex() != 0:
+            self.tab_widget.setCurrentIndex(0)
+
+        spinboxes = self.widgets['spins']['slice_indices']
+        for spinbox in spinboxes:
+            spinbox.blockSignals(True)
+        try:
+            self.selected_indices = in_plane_dims
+            for dim, value in fixed_indices.items():
+                spinboxes[dim].setValue(value)
+        finally:
+            for spinbox in spinboxes:
+                spinbox.blockSignals(False)
+
+        self.update_dimension_controls()
+        self.update()
+        relative_path = record.get('relative_path') or record.get('path') or 'DICOM file'
+        return True, f"Showing ndarray plane for {relative_path}"
 
     def _create_settings_button(self):
         button = QtWidgets.QToolButton(self)
@@ -3005,6 +3191,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         self.data = new_data
         if metadata is not None:
+            if self._dicom_dialog is not None:
+                self._dicom_dialog.close()
             self.metadata = clean_metadata(metadata)
             self._has_conventional_metadata = bool(self.metadata) or self._has_conventional_metadata
         if self.has_mask:
@@ -3036,6 +3224,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._refresh_runtime_metadata()
         if hasattr(self, '_metadata_btn'):
             self._metadata_btn.setVisible(self._has_conventional_metadata)
+        if hasattr(self, '_dicom_btn'):
+            self._dicom_btn.setVisible(bool(self._dicom_records()))
         self.singleton = [e == 1 for e in new_data.shape]
 
         if np.iscomplexobj(new_data):
