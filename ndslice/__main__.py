@@ -8,6 +8,7 @@ from pathlib import Path
 from .ndslice import ndslice
 from .selectors import h5_selector_for_path, NpzDatasetSelector, MatDatasetSelector
 from .file_interpreters import load_path
+from .config import load_config
 
 
 def main():
@@ -35,6 +36,7 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
                         help='Optional mask volume to overlay on a single main file')
     
     args = parser.parse_args()
+    viewer_config = load_config()
 
     mask_path = None
     if args.mask is not None:
@@ -56,12 +58,19 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
             suffix = ''.join(filepath.suffixes).lower()
             # Single-dataset formats and DICOM directories are handled by file_interpreters.load_path
             if filepath.is_dir() or suffix in ['.npy', '.rec', '.cfl', '.dcm', '.nii', '.nii.gz', '.txt']:
-                loaded = load_path(filepath)
+                loaded = load_path(
+                    filepath,
+                    apply_scaling=viewer_config.apply_scaling,
+                )
                 title = filepath.name or str(filepath)
                 detected_format = loaded.metadata.get('detected_format')
                 if detected_format:
                     title = f"{title} [{detected_format}]"
-                mask_data = load_path(mask_path).data if mask_path is not None else None
+                mask_data = (
+                    load_path(mask_path, apply_scaling=False).data
+                    if mask_path is not None
+                    else None
+                )
                 ndslice(data=loaded.data, title=title, block=False, filepath=filepath,
                         dim_labels=loaded.metadata.get('dim_labels'),
                         voxel_spacing=loaded.metadata.get('voxel_spacing'),

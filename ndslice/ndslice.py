@@ -80,6 +80,8 @@ MASK_GLASBEY_RGB = np.array([
     (255, 93, 130), (0, 194, 0), (146, 247, 255), (0, 150, 194),
 ], dtype=np.ubyte)
 
+
+
 try:
     from IPython import get_ipython
 except ImportError:
@@ -530,6 +532,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._dataset_path = dataset_path
         self._selector_class_name = selector_class_name
         self.metadata = cleaned_metadata
+        self._pixel_value_scaling = self._metadata_applied_scaling()
+        self._show_unscaled_pixel_values = False
+        self._pixel_value_context = None
         self._has_conventional_metadata = bool(self.metadata) or any((
             filepath is not None,
             dataset_path is not None,
@@ -604,6 +609,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 'slice_indices': [QtWidgets.QSpinBox(minimum=0, maximum=data.shape[i]-1) for i in range(data.ndim)]
             }
         }
+        self._configure_pixel_value_indicator()
         
         # Create a button group for the channel radio buttons
         self.channel_button_group = QtWidgets.QButtonGroup()
@@ -1067,6 +1073,166 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
 
 
+    def _metadata_applied_scaling(self):
+        slope = self.metadata.get('applied_scale_slope')
+        intercept = self.metadata.get('applied_scale_intercept')
+        if slope is not None and intercept is not None:
+            try:
+                slope = float(slope)
+                intercept = float(intercept)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(slope) or not np.isfinite(intercept) or slope == 0:
+                return None
+            if slope != 1.0 or intercept != 0.0:
+                return {'global': (slope, intercept)}
+
+        axis = self.metadata.get('applied_scale_axis')
+        transforms = self.metadata.get('applied_scale_transforms')
+        if not isinstance(transforms, list) or not transforms:
+            return None
+        try:
+            axis = int(axis)
+            cleaned = []
+            for transform in transforms:
+                if not isinstance(transform, list) or len(transform) != 2:
+                    return None
+                transform_slope = float(transform[0])
+                transform_intercept = float(transform[1])
+                if (
+                    not np.isfinite(transform_slope)
+                    or not np.isfinite(transform_intercept)
+                    or transform_slope == 0
+                ):
+                    return None
+                cleaned.append((transform_slope, transform_intercept))
+        except (TypeError, ValueError):
+            return None
+        if all(item == (1.0, 0.0) for item in cleaned):
+            return None
+        return {'axis': axis, 'transforms': cleaned}
+
+    def _pixel_context_scaling(self):
+        scaling = self._pixel_value_scaling
+        if scaling is None:
+            return None, None
+        if any(domain != Domain.NATIVE for domain in self.domain):
+            return None, 'transformed'
+        if any(self.combined_as_complex):
+            return None, 'transformed'
+        if 'global' in scaling:
+            return scaling['global'], None
+
+        if self._pixel_value_context is None:
+            return None, 'varies'
+        coordinate = self._pixel_value_context.get('coordinate')
+        axis = scaling['axis']
+        if coordinate is None or axis < 0 or axis >= len(coordinate):
+            return None, 'varies'
+        index = int(coordinate[axis])
+        transforms = scaling['transforms']
+        if index < 0 or index >= len(transforms):
+            return None, 'varies'
+        transform = transforms[index]
+        return (None, None) if transform == (1.0, 0.0) else (transform, None)
+
+    def _configure_pixel_value_indicator(self):
+        label = self.widgets['labels']['pixelValue']
+        label.mousePressEvent = self._pixel_value_indicator_clicked
+        transform, unavailable_reason = self._pixel_context_scaling()
+        if self._pixel_value_scaling is None or (transform is None and unavailable_reason is None):
+            label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.ArrowCursor))
+            label.setToolTip('')
+            return
+        label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+        if unavailable_reason:
+            label.setToolTip(
+                "The current value cannot be unscaled; use Apply intensity scaling to reload raw values"
+            )
+            return
+        target = 'scaled' if self._show_unscaled_pixel_values else 'unscaled'
+        label.setToolTip(f"Click to show {target} pixel values")
+
+    def _pixel_value_indicator_clicked(self, event):
+        transform, unavailable_reason = self._pixel_context_scaling()
+        if transform is not None and unavailable_reason is None:
+            self._show_unscaled_pixel_values = not self._show_unscaled_pixel_values
+            self._configure_pixel_value_indicator()
+            self._refresh_pixel_value_indicator()
+            event.accept()
+            return
+        event.ignore()
+
+    def _transform_indicator_value(self, value):
+        if self.widgets['buttons']['channel']['abs'].isChecked():
+            value = np.abs(value)
+        elif self.widgets['buttons']['channel']['angle'].isChecked():
+            value = np.angle(value)
+        elif self.widgets['buttons']['channel']['real'].isChecked():
+            value = np.real(value)
+        elif self.widgets['buttons']['channel']['imag'].isChecked():
+            value = np.imag(value)
+        if self.widgets['buttons']['processing']['symlog'].isChecked():
+            value = symlog(value)
+        return np.nan_to_num(value).item() if isinstance(value, np.generic) else np.nan_to_num(value)
+
+    def _set_pixel_value_context(
+            self, kind, position, value, mask_value=None,
+            coordinate=None, source_value=None):
+        self._pixel_value_context = {
+            'kind': kind,
+            'position': position,
+            'display_value': value,
+            'mask_value': mask_value,
+            'coordinate': coordinate,
+            'source_value': source_value,
+        }
+        self._configure_pixel_value_indicator()
+        self._refresh_pixel_value_indicator()
+
+    def _refresh_pixel_value_indicator(self):
+        if self._pixel_value_context is None:
+            return
+        context = self._pixel_value_context
+        kind = context['kind']
+        position = context['position']
+        mask_value = context['mask_value']
+        transform, unavailable_reason = self._pixel_context_scaling()
+        value = context['display_value']
+        if transform is not None and context['source_value'] is not None:
+            value = context['source_value']
+            if self._show_unscaled_pixel_values:
+                slope, intercept = transform
+                value = (value - intercept) / slope
+            value = self._transform_indicator_value(value)
+        decimal_places = getNumberOfDecimalPlaces(abs(value)) if np.isfinite(value) else 3
+        if decimal_places > 5:
+            value_text = f"{value:.3e}"
+        else:
+            max_decimal_places = 8 if kind == 'line' else decimal_places
+            decimal_places = min(max_decimal_places, max(0, decimal_places))
+            value_text = f"{value:.{decimal_places}f}"
+
+        if kind == 'image':
+            x_i, y_i = position
+            text = f"({x_i}, {y_i}) = {value_text}"
+        else:
+            text = f"[{position}] = {value_text}"
+
+        if unavailable_reason == 'varies':
+            text += " (scaled; varies by volume)"
+        elif unavailable_reason == 'transformed':
+            text += " (scaled; transformed)"
+        elif transform is not None:
+            state = 'unscaled' if self._show_unscaled_pixel_values else 'scaled'
+            text += f" ({state})"
+        if mask_value is not None:
+            if np.isfinite(mask_value) and float(mask_value).is_integer():
+                text += f" | mask = {int(mask_value)}"
+            else:
+                text += f" | mask = {mask_value:.3g}"
+        self.widgets['labels']['pixelValue'].setText(text)
+
     def _refresh_runtime_metadata(self):
         self.metadata['shape'] = list(self.data.shape)
         self.metadata['ndim'] = self.data.ndim
@@ -1404,6 +1570,29 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         origin_action.setDefaultWidget(origin_row)
         menu.addAction(origin_action)
 
+        scaling_row = QtWidgets.QWidget(menu)
+        scaling_layout = QtWidgets.QHBoxLayout()
+        scaling_layout.setContentsMargins(8, 4, 8, 4)
+        scaling_layout.setSpacing(8)
+
+        self._apply_scaling_checkbox = QtWidgets.QCheckBox(
+            "Apply intensity scaling",
+            scaling_row,
+        )
+        self._apply_scaling_checkbox.setChecked(self._viewer_config.apply_scaling)
+        self._apply_scaling_checkbox.setToolTip(
+            "Apply DICOM and NIfTI scale/intercept values while loading"
+        )
+        self._apply_scaling_checkbox.toggled.connect(
+            self._on_apply_scaling_changed
+        )
+        scaling_layout.addWidget(self._apply_scaling_checkbox)
+        scaling_row.setLayout(scaling_layout)
+
+        scaling_action = QtWidgets.QWidgetAction(menu)
+        scaling_action.setDefaultWidget(scaling_row)
+        menu.addAction(scaling_action)
+
         menu.addSeparator()
 
         channel_row = QtWidgets.QWidget(menu)
@@ -1709,6 +1898,27 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         )
         self._save_viewer_config()
         self._set_mask_opacity(opacity)
+
+    def _on_apply_scaling_changed(self, enabled):
+        enabled = bool(enabled)
+        reload_current_source = (
+            self._selector_class_name is None
+            and self._filepath is not None
+            and self.metadata.get('detected_format') in {
+                'dicom_file', 'dicom_directory', 'nifti'
+            }
+        )
+        if reload_current_source and not self._reload_file(apply_scaling=enabled):
+            self._apply_scaling_checkbox.blockSignals(True)
+            self._apply_scaling_checkbox.setChecked(self._viewer_config.apply_scaling)
+            self._apply_scaling_checkbox.blockSignals(False)
+            return
+
+        self._viewer_config = replace(
+            self._viewer_config,
+            apply_scaling=enabled,
+        )
+        self._save_viewer_config()
 
     def _set_mask_opacity(self, opacity):
         self._mask_opacity = max(0.0, min(float(opacity), 1.0))
@@ -2075,12 +2285,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             x_i = math.floor(mousePoint.x()) 
             y_i = math.floor(mousePoint.y()) 
             if x_i >= 0 and x_i < img.shape [ 0 ] and y_i >= 0 and y_i < img.shape[1]:
-                decimal_places = getNumberOfDecimalPlaces(abs(img[x_i ,y_i]))
-                if decimal_places > 5:
-                    text = "({}, {}) = {:.3e}".format (x_i, y_i, img[x_i ,y_i])
-                else:
-                    text = "({}, {}) = {:.{}f}".format (x_i, y_i, img[x_i ,y_i], decimal_places)
-
+                mask_value = None
                 mask_img = getattr(self.img_view, 'mask', None)
                 mask_item = getattr(self.img_view, 'maskImageItem', None)
                 if (
@@ -2091,12 +2296,20 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     and y_i < mask_img.shape[1]
                 ):
                     mask_value = mask_img[x_i, y_i]
-                    if np.isfinite(mask_value) and float(mask_value).is_integer():
-                        text += f" | mask = {int(mask_value)}"
-                    else:
-                        text += f" | mask = {mask_value:.3g}"
-
-                self.widgets['labels']['pixelValue'].setText(text)
+                coordinate = [
+                    spinbox.value()
+                    for spinbox in self.widgets['spins']['slice_indices']
+                ]
+                coordinate[self.selected_indices[1]] = x_i
+                coordinate[self.selected_indices[0]] = y_i
+                self._set_pixel_value_context(
+                    'image',
+                    (x_i, y_i),
+                    img[x_i, y_i],
+                    mask_value,
+                    coordinate=coordinate,
+                    source_value=self.data[tuple(coordinate)],
+                )
 
     
     def update_image_view(self):
@@ -2559,16 +2772,18 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             idx = int(round(x))
             if 0 <= idx < len(self.current_line_data):
                 val = self.current_line_data[idx]
-                # Determine formatting similar to image hover
-                decimal_places = getNumberOfDecimalPlaces(abs(val)) if np.isfinite(val) else 3
-                if decimal_places > 5:
-                    text = f"[{idx}] = {val:.3e}"
-                else:
-                    # Clamp decimal places to reasonable range
-                    dp = min(8, max(0, decimal_places))
-                    fmt = f"{{val:.{dp}f}}"
-                    text = f"[{idx}] = {val:.{dp}f}"
-                self.widgets['labels']['pixelValue'].setText(text)
+                coordinate = [
+                    spinbox.value()
+                    for spinbox in self.widgets['spins']['slice_indices']
+                ]
+                coordinate[self.line_plot_dimension] = idx
+                self._set_pixel_value_context(
+                    'line',
+                    idx,
+                    val,
+                    coordinate=coordinate,
+                    source_value=self.data[tuple(coordinate)],
+                )
                 # Move and show crosshair
                 if self.plot_crosshair is not None:
                     self.plot_crosshair.setValue(idx)
@@ -3077,7 +3292,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if self._file_watcher:
             self._file_watcher.addPath(path)
 
-    def _reload_file(self):
+    def _reload_file(self, _checked=False, apply_scaling=None):
         """Reload data from the source file, preserving slice positions where possible."""
         if self._filepath is None:
             return False
@@ -3090,7 +3305,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
             if self._selector_class_name is None:
                 from .file_interpreters import load_path
-                loaded = load_path(self._filepath)
+                loaded = load_path(
+                    self._filepath,
+                    apply_scaling=(
+                        self._viewer_config.apply_scaling
+                        if apply_scaling is None
+                        else bool(apply_scaling)
+                    ),
+                )
                 new_data = loaded.data
                 new_metadata = loaded.metadata
                 new_dim_labels = new_metadata.get('dim_labels')
@@ -3194,6 +3416,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             if self._dicom_dialog is not None:
                 self._dicom_dialog.close()
             self.metadata = clean_metadata(metadata)
+            self._pixel_value_scaling = self._metadata_applied_scaling()
+            self._show_unscaled_pixel_values = False
+            self._pixel_value_context = None
+            self._configure_pixel_value_indicator()
             self._has_conventional_metadata = bool(self.metadata) or self._has_conventional_metadata
         if self.has_mask:
             try:

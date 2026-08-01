@@ -45,6 +45,7 @@ DISPLAY_MODE_ALIASES = {
     "fit": "auto",
 }
 DEFAULT_MASK_OPACITY = 0.8
+DEFAULT_APPLY_SCALING = True
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class ViewerConfig:
     angle_colormap: str = ANGLE_COLORMAP_SAME
     default_display_mode: str = DEFAULT_DISPLAY_MODE
     default_mask_opacity: float = DEFAULT_MASK_OPACITY
+    apply_scaling: bool = DEFAULT_APPLY_SCALING
 
 
 def get_config_path():
@@ -80,6 +82,10 @@ def load_config(path=None, colormap_names=None):
     display = raw.get("display", {})
     if not isinstance(display, dict):
         display = {}
+
+    loading = raw.get("loading", {})
+    if not isinstance(loading, dict):
+        loading = {}
 
     initial_index = startup.get("initial_index", INITIAL_INDEX_FIRST)
     if initial_index not in VALID_INITIAL_INDEX:
@@ -118,6 +124,9 @@ def load_config(path=None, colormap_names=None):
     default_mask_opacity = _clean_mask_opacity(
         display.get("default_mask_opacity", DEFAULT_MASK_OPACITY)
     )
+    apply_scaling = loading.get("apply_scaling", DEFAULT_APPLY_SCALING)
+    if not isinstance(apply_scaling, bool):
+        apply_scaling = DEFAULT_APPLY_SCALING
 
     return ViewerConfig(
         initial_index=initial_index,
@@ -128,6 +137,7 @@ def load_config(path=None, colormap_names=None):
         angle_colormap=angle_colormap,
         default_display_mode=default_display_mode,
         default_mask_opacity=default_mask_opacity,
+        apply_scaling=apply_scaling,
     )
 
 
@@ -172,6 +182,11 @@ def save_config(config, path=None, colormap_names=None):
         default_display_mode = DEFAULT_DISPLAY_MODE
 
     default_mask_opacity = _clean_mask_opacity(config.default_mask_opacity)
+    apply_scaling = (
+        config.apply_scaling
+        if isinstance(config.apply_scaling, bool)
+        else DEFAULT_APPLY_SCALING
+    )
 
     text = (
         "[startup]\n"
@@ -185,6 +200,9 @@ def save_config(config, path=None, colormap_names=None):
         f'angle_colormap = "{angle_colormap}"\n'
         f'default_display_mode = "{default_display_mode}"\n'
         f"default_mask_opacity = {default_mask_opacity:.6g}\n"
+        "\n"
+        "[loading]\n"
+        f"apply_scaling = {str(apply_scaling).lower()}\n"
     )
     config_path.write_text(text, encoding="utf-8")
 

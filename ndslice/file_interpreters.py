@@ -45,11 +45,93 @@ def _valid_spacing_value(value):
     return value if np.isfinite(value) and value > 0 else None
 
 
+def _scaling_value(value, default, name):
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a finite number")
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    return value
+
+
+def _identity_scaling(slope, intercept):
+    return slope == 1.0 and intercept == 0.0
+
+
+def _set_applied_scaling_metadata(metadata, slope, intercept):
+    if _identity_scaling(slope, intercept):
+        return
+    metadata['applied_scale_slope'] = slope
+    metadata['applied_scale_intercept'] = intercept
+
+
+def _metadata_scaling(metadata):
+    slope = metadata.get('applied_scale_slope', 1.0)
+    intercept = metadata.get('applied_scale_intercept', 0.0)
+    return float(slope), float(intercept)
+
+
+def _common_applied_scaling(transforms):
+    if not transforms:
+        return None
+    scaling = tuple(transforms[0])
+    if any(tuple(transform) != scaling for transform in transforms[1:]):
+        return None
+    return scaling if not _identity_scaling(*scaling) else None
+
+
+def _dicom_rescale_parameters(dataset):
+    slope = _scaling_value(
+        getattr(dataset, 'RescaleSlope', None),
+        1.0,
+        'DICOM RescaleSlope',
+    )
+    if slope == 0.0:
+        raise ValueError("DICOM RescaleSlope must be non-zero")
+    intercept = _scaling_value(
+        getattr(dataset, 'RescaleIntercept', None),
+        0.0,
+        'DICOM RescaleIntercept',
+    )
+    return slope, intercept
+
+
+def _nifti_scaling_parameters(dataobj):
+    slope = _scaling_value(
+        getattr(dataobj, 'slope', None),
+        1.0,
+        'NIfTI scl_slope',
+    )
+    if slope == 0.0:
+        return 1.0, 0.0
+    intercept = _scaling_value(
+        getattr(dataobj, 'inter', None),
+        0.0,
+        'NIfTI scl_inter',
+    )
+    return slope, intercept
+
+
 def _nifti_voxel_spacing(zooms, ndim):
     spacing = [None] * ndim
     for dim in range(min(ndim, 3, len(zooms))):
         spacing[dim] = _valid_spacing_value(zooms[dim])
     return spacing
+
+
+def _nifti_spatial_unit(header):
+    try:
+        spatial_unit, _time_unit = header.get_xyzt_units()
+    except Exception:
+        return None
+    return {
+        'meter': 'm',
+        'mm': 'mm',
+        'micron': 'um',
+    }.get(spatial_unit)
 
 
 def _dicom_pixel_voxel_spacing(pixel_spacing, ndim):
@@ -316,8 +398,9 @@ class BartLoader:
 
 
 class DicomLoader:
-    def __init__(self, dcm_path):
+    def __init__(self, dcm_path, apply_scaling=True):
         self.dcm_path = Path(dcm_path)
+        self.apply_scaling = bool(apply_scaling)
         self.metadata = {
             'source_path': str(self.dcm_path),
             'detected_format': 'dicom_file',
@@ -347,8 +430,17 @@ class DicomLoader:
                 f"Unsupported SamplesPerPixel={dcm.SamplesPerPixel} for {self.dcm_path}"
             )
 
-        data = remove_trailing_singletons(np.asarray(dcm.pixel_array))
+        data = np.asarray(dcm.pixel_array)
+        slope, intercept = (1.0, 0.0)
+        if self.apply_scaling:
+            slope, intercept = _dicom_rescale_parameters(dcm)
+        if not _identity_scaling(slope, intercept):
+            data = data.astype(np.float32, copy=True)
+            data *= np.float32(slope)
+            data += np.float32(intercept)
+        data = remove_trailing_singletons(data)
         pixel_spacing = getattr(dcm, 'PixelSpacing', None)
+        _set_applied_scaling_metadata(self.metadata, slope, intercept)
         self.metadata.update({
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
@@ -358,6 +450,8 @@ class DicomLoader:
             'dicom_files': [single_dicom_file_record(self.dcm_path, dcm, data)],
         })
         return data
+
+
 
 
 def _json_sidecar_for_nifti(nifti_path):
@@ -439,8 +533,9 @@ def _run_dcm2niix(directory_path, output_dir):
 
 
 class DicomDirectoryLoader:
-    def __init__(self, directory_path):
+    def __init__(self, directory_path, apply_scaling=True):
         self.directory_path = Path(directory_path)
+        self.apply_scaling = bool(apply_scaling)
         self.metadata = {
             'source_path': str(self.directory_path),
             'detected_format': 'dicom_directory',
@@ -467,9 +562,14 @@ class DicomDirectoryLoader:
             nifti_dim_labels = []
             nifti_voxel_spacings = []
             nifti_affines = []
+            nifti_scaling_transforms = []
 
             for nifti_path, json_path in nifti_outputs:
-                nifti_loader = NiftiLoader(nifti_path)
+                nifti_loader = (
+                    NiftiLoader(nifti_path)
+                    if self.apply_scaling
+                    else NiftiLoader(nifti_path, apply_scaling=False)
+                )
                 arrays.append(nifti_loader.load())
                 nifti_paths.append(str(nifti_path))
                 json_paths.append(str(json_path) if json_path else None)
@@ -477,6 +577,9 @@ class DicomDirectoryLoader:
                 nifti_dim_labels.append(nifti_loader.metadata.get('dim_labels', []))
                 nifti_voxel_spacings.append(nifti_loader.metadata.get('voxel_spacing', []))
                 nifti_affines.append(nifti_loader.metadata.get('affine'))
+                nifti_scaling_transforms.append(
+                    list(_metadata_scaling(nifti_loader.metadata))
+                )
 
             if len(arrays) == 1:
                 data = arrays[0]
@@ -543,12 +646,19 @@ class DicomDirectoryLoader:
                 'dicom_files': dicom_records,
                 'converted_output_names': [Path(path).name for path in nifti_paths],
             })
+            if self.apply_scaling and len(nifti_scaling_transforms) > 1:
+                self.metadata['applied_scale_axis'] = data.ndim - 1
+                self.metadata['applied_scale_transforms'] = nifti_scaling_transforms
+            common_scaling = _common_applied_scaling(nifti_scaling_transforms)
+            if common_scaling is not None:
+                _set_applied_scaling_metadata(self.metadata, *common_scaling)
             return data
 
 
 class NiftiLoader:
-    def __init__(self, file_path):
+    def __init__(self, file_path, apply_scaling=True):
         self.file_path = Path(file_path)
+        self.apply_scaling = bool(apply_scaling)
         self.metadata = {
             'source_path': str(self.file_path),
             'detected_format': 'nifti',
@@ -567,13 +677,27 @@ class NiftiLoader:
             )
         
         image = nib.load(self.file_path)
-        data = image.get_fdata()
+        dataobj = image.dataobj
+        slope, intercept = (1.0, 0.0)
+        if self.apply_scaling:
+            slope, intercept = _nifti_scaling_parameters(dataobj)
+        if _identity_scaling(slope, intercept):
+            get_unscaled = getattr(dataobj, 'get_unscaled', None)
+            data = (
+                np.asanyarray(get_unscaled())
+                if callable(get_unscaled)
+                else np.asanyarray(dataobj)
+            )
+        else:
+            data = image.get_fdata(dtype=np.float32)
         data = remove_trailing_singletons(data)
+        _set_applied_scaling_metadata(self.metadata, slope, intercept)
         self.metadata.update({
             'shape': tuple(data.shape),
             'dtype': str(data.dtype),
             'dim_labels': _nifti_dim_labels(data.ndim),
             'voxel_spacing': _nifti_voxel_spacing(image.header.get_zooms(), data.ndim),
+            'spatial_unit': _nifti_spatial_unit(image.header),
             'affine': image.affine.tolist(),
         })
         return data
@@ -639,11 +763,11 @@ class TextLoader:
         return data
 
 
-def load_path(filepath):
+def load_path(filepath, apply_scaling=True):
     filepath = Path(filepath)
 
     if filepath.is_dir():
-        loader = DicomDirectoryLoader(filepath)
+        loader = DicomDirectoryLoader(filepath, apply_scaling=apply_scaling)
         data = loader.load()
         return LoadedPath(data=data, metadata=loader.metadata)
 
@@ -666,9 +790,9 @@ def load_path(filepath):
     elif suffix == '.cfl':
         loader = BartLoader(filepath)
     elif suffix == '.dcm':
-        loader = DicomLoader(filepath)
+        loader = DicomLoader(filepath, apply_scaling=apply_scaling)
     elif suffix in ['.nii', '.nii.gz']:
-        loader = NiftiLoader(filepath)
+        loader = NiftiLoader(filepath, apply_scaling=apply_scaling)
     elif suffix == '.txt':
         loader = TextLoader(filepath)
     else:
@@ -688,7 +812,7 @@ def load_path(filepath):
 
 
 
-def load_file(filepath):
+def load_file(filepath, apply_scaling=True):
     """
     Generic path loader - automatically detects format and returns a NumPy array.
     
@@ -708,4 +832,4 @@ def load_file(filepath):
         NumPy array
         
     """
-    return load_path(filepath).data
+    return load_path(filepath, apply_scaling=apply_scaling).data
