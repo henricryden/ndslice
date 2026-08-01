@@ -12,6 +12,7 @@ from pathlib import Path
 from .imageview2d import ImageView2D
 from .range_slider import RangeSlider
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
+from .metadata import MetadataDialog, build_metadata_model, clean_metadata
 from .config import (
     ANGLE_COLORMAP_SAME,
     DEFAULT_CHANNEL,
@@ -487,11 +488,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
                  selector_class_name=None, config_path=None, dim_labels=None,
-                 voxel_spacing=None, mask=None):
+                 voxel_spacing=None, mask=None, metadata=None):
         super(NDSliceWindow, self).__init__()
         self.resize(800,800)
 
         self.data = data
+        cleaned_metadata = clean_metadata(metadata)
+        if dim_labels is None:
+            dim_labels = cleaned_metadata.get('dim_labels')
+        if voxel_spacing is None:
+            voxel_spacing = cleaned_metadata.get('voxel_spacing')
         self.mask_data, self.mask_labels = self._normalize_mask(mask, data.shape)
         self.mask_positive_labels = self.mask_labels[self.mask_labels > 0]
         self.has_mask = self.mask_data is not None
@@ -522,6 +528,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._filepath = filepath
         self._dataset_path = dataset_path
         self._selector_class_name = selector_class_name
+        self.metadata = cleaned_metadata
+        self._has_conventional_metadata = bool(self.metadata) or any((
+            filepath is not None,
+            dataset_path is not None,
+            dim_labels is not None,
+            voxel_spacing is not None,
+            mask is not None,
+        ))
+        self._refresh_runtime_metadata()
         
         self.axis_flipped = [False] * data.ndim  # Track flip state so that one can toggle dims and come back to the same flip state
         
@@ -975,6 +990,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.layouts['topUp'].addWidget(self.widgets['labels']['arrayInfo'])
         self.layouts['topUp'].addStretch(1)
 
+        self._metadata_btn = self._create_metadata_button()
+        self.layouts['topUp'].addWidget(self._metadata_btn)
+
         self._settings_btn = self._create_settings_button()
         self.layouts['topUp'].addWidget(self._settings_btn)
 
@@ -1042,6 +1060,57 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
 
 
+
+    def _refresh_runtime_metadata(self):
+        self.metadata['shape'] = list(self.data.shape)
+        self.metadata['ndim'] = self.data.ndim
+        self.metadata['dtype'] = str(self.data.dtype)
+        if self._filepath is not None:
+            self.metadata.setdefault('source_path', str(self._filepath))
+        if self._dataset_path is not None:
+            self.metadata['dataset_path'] = str(self._dataset_path)
+
+    def _create_metadata_button(self):
+        button = QtWidgets.QToolButton(self)
+        button.setText("i")
+        button.setToolTip("Array information")
+        button.setAutoRaise(True)
+        button.setFixedSize(28, 24)
+        button.setStyleSheet(
+            "QToolButton { font-size: 14pt; font-weight: bold; "
+            "font-family: serif; padding: 0px; margin: 0px; }"
+        )
+        button.clicked.connect(self._show_metadata_dialog)
+        button.setVisible(self._has_conventional_metadata)
+        return button
+
+    def _metadata_dialog_model(self):
+        mode = self._mask_color_mode()
+        label_colors = {
+            int(value): (
+                self._mask_rainbow_color(int(value))
+                if mode == 'Rainbow'
+                else MASK_COLOR_RGB[mode]
+            )
+            for value in self.mask_positive_labels
+        }
+        return build_metadata_model(
+            self.data,
+            self.metadata,
+            self.dim_labels,
+            self.voxel_spacing,
+            has_voxel_spacing_metadata=self._has_voxel_spacing_metadata,
+            mask_data=self.mask_data if self.has_mask else None,
+            mask_positive_labels=self.mask_positive_labels,
+            label_colors=label_colors,
+        )
+
+    def _metadata_dialog_text(self):
+        return self._metadata_dialog_model()['copy_text']
+
+    def _show_metadata_dialog(self):
+        dialog = MetadataDialog(self._metadata_dialog_model(), self)
+        dialog.exec()
 
     def _create_settings_button(self):
         button = QtWidgets.QToolButton(self)
@@ -2825,16 +2894,21 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def _reload_file(self):
         """Reload data from the source file, preserving slice positions where possible."""
         if self._filepath is None:
-            return
+            return False
         try:
             new_data = None
             new_dataset_path = self._dataset_path
             new_dim_labels = self.dim_labels
             new_voxel_spacing = self.voxel_spacing
+            new_metadata = self.metadata
 
             if self._selector_class_name is None:
-                from .file_interpreters import load_file
-                new_data = load_file(self._filepath)
+                from .file_interpreters import load_path
+                loaded = load_path(self._filepath)
+                new_data = loaded.data
+                new_metadata = loaded.metadata
+                new_dim_labels = new_metadata.get('dim_labels')
+                new_voxel_spacing = new_metadata.get('voxel_spacing')
             else:
                 from .selectors import H5DatasetSelector, RieslingH5DatasetSelector, NpzDatasetSelector, MatDatasetSelector
                 selector_map = {
@@ -2845,7 +2919,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 }
                 selector_cls = selector_map.get(self._selector_class_name)
                 if selector_cls is None:
-                    return
+                    return False
                 selector = selector_cls(self._filepath)
                 compatible_keys = {d[0] for d in selector.compatible_datasets}
                 if self._dataset_path is not None and self._dataset_path in compatible_keys:
@@ -2856,12 +2930,13 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     spacing = selector.voxel_spacing_for_path(self._dataset_path, new_data.ndim)
                     if spacing is not None:
                         new_voxel_spacing = spacing
+                    new_metadata = selector.metadata_for_path(self._dataset_path, new_data)
                     selector.close()
                 elif selector.requires_gui():
                     selected = selector.show()
                     if selected is None:
                         selector.close()
-                        return  # User cancelled — keep ⚠️ visible
+                        return False  # User cancelled — keep ⚠️ visible
                     new_data = selector.load_data(selected)
                     labels = selector.dim_labels_for_path(selected, new_data.ndim)
                     if labels is not None:
@@ -2869,13 +2944,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     spacing = selector.voxel_spacing_for_path(selected, new_data.ndim)
                     if spacing is not None:
                         new_voxel_spacing = spacing
+                    new_metadata = selector.metadata_for_path(selected, new_data)
                     new_dataset_path = selected
                     selector.close()
                 else:
                     result = selector.get_single_data()
                     if result is None:
                         selector.close()
-                        return
+                        return False
                     new_dataset_path, new_data = result
                     labels = selector.dim_labels_for_path(new_dataset_path, new_data.ndim)
                     if labels is not None:
@@ -2883,21 +2959,29 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     spacing = selector.voxel_spacing_for_path(new_dataset_path, new_data.ndim)
                     if spacing is not None:
                         new_voxel_spacing = spacing
+                    new_metadata = selector.metadata_for_path(new_dataset_path, new_data)
                     selector.close()
 
             if new_data is None:
-                return
+                return False
 
             self._dataset_path = new_dataset_path
-            self._reset_data(new_data, dim_labels=new_dim_labels, voxel_spacing=new_voxel_spacing)
+            self._reset_data(
+                new_data,
+                dim_labels=new_dim_labels,
+                voxel_spacing=new_voxel_spacing,
+                metadata=new_metadata,
+            )
             self._reload_btn.setText("⟳")
             self._reload_btn.setToolTip("Reload file")
             if self._file_watcher and self._filepath:
                 self._file_watcher.addPath(str(self._filepath))
+            return True
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Reload Error", f"Failed to reload:\n{e}")
+            return False
 
-    def _reset_data(self, new_data, dim_labels=None, voxel_spacing=None):
+    def _reset_data(self, new_data, dim_labels=None, voxel_spacing=None, metadata=None):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
@@ -2912,13 +2996,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 config_path=self._config_path,
                                 dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
                                 voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
-                                mask=self.mask_data)
+                                mask=self.mask_data,
+                                metadata=metadata if metadata is not None else self.metadata)
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
             return
 
         self.data = new_data
+        if metadata is not None:
+            self.metadata = clean_metadata(metadata)
+            self._has_conventional_metadata = bool(self.metadata) or self._has_conventional_metadata
         if self.has_mask:
             try:
                 self.mask_data, self.mask_labels = self._normalize_mask(self.mask_data, new_data.shape)
@@ -2945,6 +3033,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if dim_labels is not None:
             self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
             self._apply_dimension_button_labels()
+        self._refresh_runtime_metadata()
+        if hasattr(self, '_metadata_btn'):
+            self._metadata_btn.setVisible(self._has_conventional_metadata)
         self.singleton = [e == 1 for e in new_data.shape]
 
         if np.iscomplexobj(new_data):
@@ -3064,7 +3155,7 @@ def _retain_window_reference(app, win):
 
 def _create_window(data, title='', complex_dim=None, filepath=None,
                    dataset_path=None, selector_class_name=None, dim_labels=None,
-                   voxel_spacing=None, mask=None):
+                   voxel_spacing=None, mask=None, metadata=None):
     _prepare_qt_environment()
 
     app = pg.mkQApp()
@@ -3075,7 +3166,8 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
                         selector_class_name=selector_class_name,
                         dim_labels=dim_labels,
                         voxel_spacing=voxel_spacing,
-                        mask=mask)
+                        mask=mask,
+                        metadata=metadata)
     win.setWindowTitle(title)
     win.show()
 
@@ -3083,7 +3175,7 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
 
 def _run_window(data, title='', complex_dim=None, filepath=None,
                 dataset_path=None, selector_class_name=None, dim_labels=None,
-                voxel_spacing=None, mask=None):
+                voxel_spacing=None, mask=None, metadata=None):
     """Open a viewer window in this process and block on the Qt event loop."""
     try:
         app, win = _create_window(
@@ -3093,6 +3185,7 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
             dim_labels=dim_labels,
             voxel_spacing=voxel_spacing,
             mask=mask,
+            metadata=metadata,
         )
         return app.exec()
     except BaseException:
@@ -3102,7 +3195,7 @@ def _run_window(data, title='', complex_dim=None, filepath=None,
 
 def _show_window_inline(data, title='', complex_dim=None, filepath=None,
                         dataset_path=None, selector_class_name=None, dim_labels=None,
-                        voxel_spacing=None, mask=None):
+                        voxel_spacing=None, mask=None, metadata=None):
     """Open a viewer window in this process without starting app.exec()."""
     app, win = _create_window(
         data, title=title, complex_dim=complex_dim,
@@ -3111,6 +3204,7 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
         dim_labels=dim_labels,
         voxel_spacing=voxel_spacing,
         mask=mask,
+        metadata=metadata,
     )
 
     _retain_window_reference(app, win)
@@ -3119,7 +3213,7 @@ def _show_window_inline(data, title='', complex_dim=None, filepath=None,
 
 def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
             dataset_path=None, selector_class_name=None, dim_labels=None,
-            voxel_spacing=None, mask=None):
+            voxel_spacing=None, mask=None, metadata=None):
     if not isinstance(data, np.ndarray):
         raise TypeError("data must be a numpy array")
     if data.ndim < 1:
@@ -3132,6 +3226,7 @@ def ndslice(data, title='', block=False, complex_dim=None, filepath=None,
         "dim_labels": dim_labels,
         "voxel_spacing": voxel_spacing,
         "mask": mask,
+        "metadata": clean_metadata(metadata),
     }
 
     if block:

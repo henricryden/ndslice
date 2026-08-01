@@ -65,7 +65,8 @@ For files with multiple datasets (HDF5, NPZ, MAT), a GUI selector will automatic
                 ndslice(data=loaded.data, title=title, block=False, filepath=filepath,
                         dim_labels=loaded.metadata.get('dim_labels'),
                         voxel_spacing=loaded.metadata.get('voxel_spacing'),
-                        mask=mask_data)
+                        mask=mask_data,
+                        metadata=loaded.metadata)
                 continue
             
             # Multi-dataset formats - use selectors

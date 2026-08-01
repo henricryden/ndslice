@@ -39,6 +39,7 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
         data = selector.load_data(selected_path)
         dim_labels = selector.dim_labels_for_path(selected_path, data.ndim)
         voxel_spacing = selector.voxel_spacing_for_path(selected_path, data.ndim)
+        metadata = selector.metadata_for_path(selected_path, data)
         selector.close()
         ndslice(data=data,
                 title=f"{filepath.name} - {selected_path}",
@@ -48,7 +49,8 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
                 dataset_path=selected_path,
                 selector_class_name=selector_class_name,
                 dim_labels=dim_labels,
-                voxel_spacing=voxel_spacing)
+                voxel_spacing=voxel_spacing,
+                metadata=metadata)
 
 
 class DatasetSelector:
@@ -86,6 +88,17 @@ class DatasetSelector:
     def voxel_spacing_for_path(self, path, data_ndim=None):
         return None
 
+    def metadata_for_path(self, path, data):
+        return {
+            'source_path': str(self.filepath),
+            'detected_format': self.filepath.suffix.lower().lstrip('.'),
+            'dataset_path': str(path),
+            'shape': list(data.shape),
+            'dtype': str(data.dtype),
+            'dim_labels': self.dim_labels_for_path(path, data.ndim),
+            'voxel_spacing': self.voxel_spacing_for_path(path, data.ndim),
+        }
+
     def close(self):
         """Close any open file handles. Subclasses override if needed."""
         pass
@@ -117,6 +130,7 @@ class DatasetSelector:
                 name, data = result
                 dim_labels = self.dim_labels_for_path(name, data.ndim)
                 voxel_spacing = self.voxel_spacing_for_path(name, data.ndim)
+                metadata = self.metadata_for_path(name, data)
                 self.close()
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {name}",
@@ -126,7 +140,8 @@ class DatasetSelector:
                         dataset_path=name,
                         selector_class_name=self.__class__.__name__,
                         dim_labels=dim_labels,
-                        voxel_spacing=voxel_spacing)
+                        voxel_spacing=voxel_spacing,
+                        metadata=metadata)
                 return True
             else:
                 return False
@@ -141,6 +156,7 @@ class DatasetSelector:
                 data = self.load_data(selected_path)
                 dim_labels = self.dim_labels_for_path(selected_path, data.ndim)
                 voxel_spacing = self.voxel_spacing_for_path(selected_path, data.ndim)
+                metadata = self.metadata_for_path(selected_path, data)
                 self.close()
                 ndslice(data=data,
                         title=f"{self.filepath.name} - {selected_path}",
@@ -150,7 +166,8 @@ class DatasetSelector:
                         dataset_path=selected_path,
                         selector_class_name=self.__class__.__name__,
                         dim_labels=dim_labels,
-                        voxel_spacing=voxel_spacing)
+                        voxel_spacing=voxel_spacing,
+                        metadata=metadata)
                 return True
             return False
         else:
