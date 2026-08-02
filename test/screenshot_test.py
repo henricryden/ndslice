@@ -35,7 +35,7 @@ def take_screenshot(win, path: Path):
 
 def take_widget_composite_screenshot(widgets, path: Path):
     """Grab visible widgets and stitch them into one screenshot."""
-    from pyqtgraph.Qt import QtGui
+    from PyQt6 import QtGui, QtWidgets
 
     pixmaps = []
     for widget in widgets:
@@ -51,7 +51,9 @@ def take_widget_composite_screenshot(widgets, path: Path):
     width = max(pixmap.width() for pixmap in pixmaps)
     height = sum(pixmap.height() for pixmap in pixmaps) + spacing * (len(pixmaps) - 1)
     combined = QtGui.QPixmap(width, height)
-    combined.fill(QtGui.QColor("white"))
+    combined.fill(
+        QtWidgets.QApplication.palette().color(QtGui.QPalette.ColorRole.Window)
+    )
 
     painter = QtGui.QPainter(combined)
     y = 0
@@ -79,8 +81,8 @@ def main():
     from ndslice.ndslice import NDSliceWindow
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--style', default='Fusion',
-                        help='Qt style name, e.g. Fusion, Windows, macOS (default: Fusion)')
+    parser.add_argument('--style', default=None,
+                        help='Optional Qt style override, e.g. Fusion or Windows')
     parser.add_argument('--out', default=None,
                         help='Output directory for screenshot (default: test/screenshots/)')
     args = parser.parse_args()
@@ -88,9 +90,11 @@ def main():
     data = make_data()
 
     app = pg.mkQApp()
-    app.setStyle(args.style)
+    if args.style:
+        app.setStyle(args.style)
     win = NDSliceWindow(data)
-    win.setWindowTitle(f"CI test — {sys.platform} — style: {args.style}")
+    style_name = args.style or app.style().objectName()
+    win.setWindowTitle(f"CI test — {sys.platform} — style: {style_name}")
     win.resize(800, 800)
     win.show()
 

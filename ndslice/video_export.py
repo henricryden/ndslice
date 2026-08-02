@@ -643,7 +643,7 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         
         # Info
         self.info_label = QtWidgets.QLabel()
-        self.info_label.setStyleSheet("color: gray; font-size: 11px;")
+        self.info_label.setStyleSheet("color: palette(mid); font-size: 11px;")
         layout.addWidget(self.info_label)
         self._update_frame_count_label()
         

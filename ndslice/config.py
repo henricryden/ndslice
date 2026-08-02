@@ -43,6 +43,14 @@ DISPLAY_MODE_ALIASES = {
 }
 DEFAULT_MASK_OPACITY = 0.8
 DEFAULT_APPLY_SCALING = True
+COLOR_SCHEME_SYSTEM = "system"
+COLOR_SCHEME_LIGHT = "light"
+COLOR_SCHEME_DARK = "dark"
+SUPPORTED_COLOR_SCHEMES = (
+    COLOR_SCHEME_SYSTEM,
+    COLOR_SCHEME_LIGHT,
+    COLOR_SCHEME_DARK,
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,7 @@ class ViewerConfig:
     default_display_mode: str = DEFAULT_DISPLAY_MODE
     default_mask_opacity: float = DEFAULT_MASK_OPACITY
     apply_scaling: bool = DEFAULT_APPLY_SCALING
+    color_scheme: str = COLOR_SCHEME_SYSTEM
 
 
 def get_config_path():
@@ -121,6 +130,9 @@ def load_config(path=None, colormap_names=None):
     default_mask_opacity = _clean_mask_opacity(
         display.get("default_mask_opacity", DEFAULT_MASK_OPACITY)
     )
+    color_scheme = display.get("color_scheme", COLOR_SCHEME_SYSTEM)
+    if color_scheme not in SUPPORTED_COLOR_SCHEMES:
+        color_scheme = COLOR_SCHEME_SYSTEM
     apply_scaling = loading.get("apply_scaling", DEFAULT_APPLY_SCALING)
     if not isinstance(apply_scaling, bool):
         apply_scaling = DEFAULT_APPLY_SCALING
@@ -135,6 +147,7 @@ def load_config(path=None, colormap_names=None):
         default_display_mode=default_display_mode,
         default_mask_opacity=default_mask_opacity,
         apply_scaling=apply_scaling,
+        color_scheme=color_scheme,
     )
 
 
@@ -179,6 +192,9 @@ def save_config(config, path=None, colormap_names=None):
         default_display_mode = DEFAULT_DISPLAY_MODE
 
     default_mask_opacity = _clean_mask_opacity(config.default_mask_opacity)
+    color_scheme = config.color_scheme
+    if color_scheme not in SUPPORTED_COLOR_SCHEMES:
+        color_scheme = COLOR_SCHEME_SYSTEM
     apply_scaling = (
         config.apply_scaling
         if isinstance(config.apply_scaling, bool)
@@ -197,6 +213,7 @@ def save_config(config, path=None, colormap_names=None):
         f'angle_colormap = "{angle_colormap}"\n'
         f'default_display_mode = "{default_display_mode}"\n'
         f"default_mask_opacity = {default_mask_opacity:.6g}\n"
+        f'color_scheme = "{color_scheme}"\n'
         "\n"
         "[loading]\n"
         f"apply_scaling = {str(apply_scaling).lower()}\n"

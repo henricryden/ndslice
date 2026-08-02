@@ -1,6 +1,21 @@
 # Changelog
 
 
+## [Unreleased]
+
+### Added
+- Native light/dark appearance support with persistent System, Light, and Dark settings.
+- Metadata and DICOM tag inspection
+
+### Changed
+- PyQt6 6.8 or newer is now required (PyQt5 support removed)
+- ndslice now uses the native platform widget style instead of forcing Fusion.
+- Adopted SPEC 0 with Python 3.12, NumPy 2.2, and SciPy 1.15 minimums.
+
+### Fixed
+- Improved Linux dark-mode contrast for controls, text, and toolbar symbols.
+
+
 ## [0.9.0]
 
 ### Added

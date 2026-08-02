@@ -6,9 +6,8 @@ import numpy as np
 
 
 def _show_selector(filepath, selector_class_name, interpret_as_complex):
-    from pyqtgraph.Qt import QtWidgets
     from .ndslice import ndslice
-    import sys
+    from .qt_application import get_qapplication
 
     # Import appropriate selector class (not checking filename twice with this approach)
     if selector_class_name == 'H5DatasetSelector':
@@ -27,8 +26,7 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
         return
     
     # Create QApplication
-    import pyqtgraph as pg
-    app = pg.mkQApp()
+    get_qapplication()
     
     # Create selector
     selector = selector_class(filepath)
@@ -56,14 +54,11 @@ def _show_selector(filepath, selector_class_name, interpret_as_complex):
 class DatasetSelector:
     """Base class for GUI dialog to select datasets from multi-dataset files."""
     
-    COLOR_INCOMPATIBLE = (180, 180, 180) # Light grey for incompatible items
-    
     def __init__(self, filepath, compatible_datasets=None):
-        from pyqtgraph.Qt import QtWidgets, QtCore, QtGui
+        from PyQt6 import QtCore, QtWidgets
         
         self.QtWidgets = QtWidgets
         self.QtCore = QtCore
-        self.QtGui = QtGui
         
         self.filepath = filepath
         self.compatible_datasets = compatible_datasets or []
@@ -149,8 +144,8 @@ class DatasetSelector:
         # Multiple datasets
         # Ensure QApplication exists
         if block:
-            import pyqtgraph as pg
-            app = pg.mkQApp()
+            from .qt_application import get_qapplication
+            get_qapplication()
             
             if selected_path := self.show():
                 data = self.load_data(selected_path)
@@ -275,9 +270,6 @@ class DatasetSelector:
 
         if not compatible: # Mark incompatible items
             item.setFlags(item.flags() & ~self.QtCore.Qt.ItemFlag.ItemIsEnabled)
-            item.setForeground(0, self.QtGui.QBrush(self.QtGui.QColor(*self.COLOR_INCOMPATIBLE)))
-            item.setForeground(1, self.QtGui.QBrush(self.QtGui.QColor(*self.COLOR_INCOMPATIBLE)))
-            item.setForeground(2, self.QtGui.QBrush(self.QtGui.QColor(*self.COLOR_INCOMPATIBLE)))
         
         if isinstance(parent, self.QtWidgets.QTreeWidget):
             parent.addTopLevelItem(item)

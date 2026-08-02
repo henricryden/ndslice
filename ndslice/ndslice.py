@@ -15,6 +15,9 @@ from .metadata import MetadataDialog, build_metadata_model, clean_metadata
 from .dicom_dialog import DicomTagsDialog
 from .config import (
     ANGLE_COLORMAP_SAME,
+    COLOR_SCHEME_DARK,
+    COLOR_SCHEME_LIGHT,
+    COLOR_SCHEME_SYSTEM,
     DEFAULT_CHANNEL,
     DEFAULT_COLORMAP, 
     DEFAULT_DISPLAY_MODE, 
@@ -26,11 +29,17 @@ from .config import (
     INITIAL_INDEX_FIRST, 
     INITIAL_INDEX_LAST, 
     SUPPORTED_CHANNELS,
+    SUPPORTED_COLOR_SCHEMES,
     SUPPORTED_DISPLAY_MODES, 
     SUPPORTED_ORIGINS,
     VALID_DEFAULT_SLICE,
     load_config, 
     save_config, 
+)
+from .qt_application import (
+    application_is_ndslice_owned,
+    apply_color_scheme,
+    get_qapplication,
 )
 import multiprocessing as mp
 import warnings
@@ -264,8 +273,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     # Styling constants — use pt (point) units so font sizes are DPI-independent
     DIMENSION_LABEL_STYLE = "QLabel { font-size: 9pt; padding: 1px; margin: 2px; }"
     FLIP_ICON_STYLE = "QLabel { font-size: 15pt; padding: 0px; margin: 0px; color: palette(text); }"
-    BUTTON_STYLE = "QPushButton { font-size: 9pt; padding: 2px; margin: 2px; } QPushButton:disabled { color: palette(mid); }"
-    SPINBOX_STYLE = "QSpinBox { font-size: 9pt; } QSpinBox:disabled { color: palette(mid); }"
+    BUTTON_STYLE = "QPushButton { font-size: 9pt; padding: 2px; margin: 2px; }"
+    SPINBOX_STYLE = "QSpinBox { font-size: 9pt; }"
     RADIO_BUTTON_STYLE = "QRadioButton { font-size: 9pt; }"
     GROUPBOX_BASE_STYLE = "QGroupBox { font-size: 9pt; font-weight: bold; border: 1px solid palette(mid); border-radius: 3px; margin-top: 1.4ex; padding-top: 3pt; } QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
     DISPLAY_MODE_LABELS = {
@@ -294,6 +303,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         "abs": "Abs",
         "imag": "Imag",
         "angle": "Angle",
+    }
+    COLOR_SCHEME_LABELS = {
+        COLOR_SCHEME_SYSTEM: "System",
+        COLOR_SCHEME_LIGHT: "Light",
+        COLOR_SCHEME_DARK: "Dark",
     }
     
     @staticmethod
@@ -980,7 +994,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         # Reload / file-changed button (⟳ by default, ⚠️ when file changes on disk)
         self._reload_btn = QtWidgets.QPushButton("⟳")
-        self._reload_btn.setStyleSheet("QPushButton { font-size: 18pt; padding: 1px 2px; margin: 0px; border: none; background: transparent; }")
+        self._reload_btn.setStyleSheet(
+            "QPushButton { font-size: 18pt; padding: 1px 2px; margin: 0px; "
+            "border: none; background: transparent; color: palette(window-text); }"
+        )
         self._reload_btn.setToolTip("Reload file")
         self._reload_btn.setFlat(True)
         self._reload_btn.setFixedSize(28, 20)
@@ -1243,7 +1260,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         button.setFixedSize(28, 24)
         button.setStyleSheet(
             "QToolButton { font-size: 14pt; font-weight: bold; "
-            "font-family: serif; padding: 0px; margin: 0px; }"
+            "font-family: serif; padding: 0px; margin: 0px; "
+            "color: palette(window-text); }"
         )
         button.clicked.connect(self._show_metadata_dialog)
         button.setVisible(self._has_conventional_metadata)
@@ -1288,16 +1306,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _create_dicom_button(self):
         button = QtWidgets.QToolButton(self)
-        icon = QtGui.QIcon.fromTheme("tag")
-        if icon.isNull():
-            button.setText("🏷")
-            self._set_emoji_font(button)
-        else:
-            button.setIcon(icon)
+        button.setText("🏷")
+        self._set_emoji_font(button)
         button.setToolTip("DICOM tags")
         button.setAutoRaise(True)
         button.setFixedSize(28, 24)
-        button.setStyleSheet("QToolButton { font-size: 14pt; padding: 0px; margin: 0px; }")
+        button.setStyleSheet(
+            "QToolButton { font-size: 14pt; padding: 0px; margin: 0px; "
+            "color: palette(window-text); }"
+        )
         button.clicked.connect(self._show_dicom_dialog)
         button.setVisible(bool(self._dicom_records()))
         return button
@@ -1463,16 +1480,55 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         button.setToolTip(f"Settings (ndslice {_package_version()})")
         button.setAutoRaise(True)
         button.setFixedSize(28, 24)
-        button.setStyleSheet("QToolButton { font-size: 15pt; padding: 0px; margin: 0px; }")
+        button.setStyleSheet(
+            "QToolButton { font-size: 15pt; padding: 0px; margin: 0px; "
+            "color: palette(window-text); }"
+        )
         self._set_emoji_font(button)
 
-        try:
-            button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        except AttributeError:
-            button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
 
         menu = QtWidgets.QMenu(button)
         self._settings_menu = menu
+
+        color_scheme_row = QtWidgets.QWidget(menu)
+        color_scheme_layout = QtWidgets.QHBoxLayout()
+        color_scheme_layout.setContentsMargins(8, 4, 8, 4)
+        color_scheme_layout.setSpacing(8)
+
+        color_scheme_label = QtWidgets.QLabel("Theme")
+        self._color_scheme_combo = QtWidgets.QComboBox(color_scheme_row)
+        for color_scheme in SUPPORTED_COLOR_SCHEMES:
+            self._color_scheme_combo.addItem(
+                self.COLOR_SCHEME_LABELS[color_scheme],
+                color_scheme,
+            )
+
+        color_scheme_index = self._color_scheme_combo.findData(
+            self._viewer_config.color_scheme
+        )
+        if color_scheme_index < 0:
+            color_scheme_index = self._color_scheme_combo.findData(COLOR_SCHEME_SYSTEM)
+        self._color_scheme_combo.setCurrentIndex(max(0, color_scheme_index))
+        self._color_scheme_combo.currentIndexChanged.connect(
+            self._on_color_scheme_changed
+        )
+
+        color_scheme_layout.addWidget(color_scheme_label)
+        color_scheme_layout.addWidget(self._color_scheme_combo)
+        color_scheme_row.setLayout(color_scheme_layout)
+
+        if not application_is_ndslice_owned():
+            tooltip = "Theme is controlled by the host Qt application"
+            color_scheme_row.setEnabled(False)
+            color_scheme_row.setToolTip(tooltip)
+            color_scheme_label.setToolTip(tooltip)
+            self._color_scheme_combo.setToolTip(tooltip)
+
+        color_scheme_action = QtWidgets.QWidgetAction(menu)
+        color_scheme_action.setDefaultWidget(color_scheme_row)
+        menu.addAction(color_scheme_action)
+        menu.addSeparator()
 
         initial_index_row = QtWidgets.QWidget(menu)
         initial_index_layout = QtWidgets.QHBoxLayout()
@@ -1826,6 +1882,20 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._viewer_config = replace(self._viewer_config, initial_index=initial_index)
         self._save_viewer_config()
 
+    def _on_color_scheme_changed(self, index):
+        color_scheme = self._color_scheme_combo.itemData(index)
+        if color_scheme not in SUPPORTED_COLOR_SCHEMES:
+            color_scheme = COLOR_SCHEME_SYSTEM
+
+        self._viewer_config = replace(
+            self._viewer_config,
+            color_scheme=color_scheme,
+        )
+        self._save_viewer_config()
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            apply_color_scheme(app, color_scheme)
+
     def _on_default_slice_changed(self, index):
         default_slice = self._default_slice_combo.itemData(index)
         if default_slice not in VALID_DEFAULT_SLICE:
@@ -2026,35 +2096,34 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if self.singleton[dim]:
             return
     
-        p = QtGui.QPalette()
-        
         # If already transformed, any click returns to native
         if self.domain[dim] == Domain.FOURIER:
             # From FFT domain, go back to native (undo)
             self.domain[dim] = Domain.NATIVE
-            p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('black'))
-            label.setStyleSheet("font-weight: normal;")
+            label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
             self._apply_ifft(dim)  # Undo the FFT by applying IFFT
         elif self.domain[dim] == Domain.INV_FOURIER:
             # From IFFT domain, go back to native (undo)
             self.domain[dim] = Domain.NATIVE
-            p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('black'))
-            label.setStyleSheet("font-weight: normal;")
+            label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
             self._apply_fft(dim)  # Undo the IFFT by applying FFT
         elif event.button() == QtCore.Qt.MouseButton.RightButton:
             # Right click from native: apply IFFT
             self.domain[dim] = Domain.INV_FOURIER
-            p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('green'))
-            label.setStyleSheet("font-weight: bold; color: green;")
+            label.setStyleSheet(
+                self.DIMENSION_LABEL_STYLE
+                + " QLabel { font-weight: bold; color: palette(link-visited); }"
+            )
             self._apply_ifft(dim)
         else:
             # Left click from native: apply FFT
             self.domain[dim] = Domain.FOURIER
-            p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('blue'))
-            label.setStyleSheet("font-weight: bold; color: blue;")
+            label.setStyleSheet(
+                self.DIMENSION_LABEL_STYLE
+                + " QLabel { font-weight: bold; color: palette(link); }"
+            )
             self._apply_fft(dim)
 
-        label.setPalette(p)
         self.update_image_view()
         self.update_line_plot()
         
@@ -3563,8 +3632,7 @@ def _create_window(data, title='', complex_dim=None, filepath=None,
                    voxel_spacing=None, mask=None, metadata=None):
     _prepare_qt_environment()
 
-    app = pg.mkQApp()
-    app.setStyle('Fusion')
+    app = get_qapplication()
 
     win = NDSliceWindow(data, complex_dim=complex_dim, filepath=filepath,
                         dataset_path=dataset_path,

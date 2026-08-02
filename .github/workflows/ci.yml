@@ -34,11 +34,11 @@ jobs:
         if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python test/screenshot_test.py --style Fusion
+        run: python test/screenshot_test.py
 
       - name: Run screenshot test (macOS / Windows)
         if: runner.os != 'Linux'
-        run: python test/screenshot_test.py --style Fusion
+        run: python test/screenshot_test.py
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
