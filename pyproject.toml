@@ -16,25 +16,20 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
 keywords = ["visualization", "numpy", "fft", "image-viewer", "data-visualization"]
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
-    "numpy>=1.20.0",
+    "numpy>=2.2.0",
     "pyqtgraph>=0.14.0",
-    "PyQt5>=5.15.0",
+    "PyQt6>=6.8.0",
     "platformdirs>=3.0.0",
-    "tomli>=1.1.0; python_version < '3.11'",
     "h5py>=3.0.0",
-    "scipy>=1.7.0",
+    "scipy>=1.15.0",
     "pydicom>=2.4.0",
     "nibabel>=4.0.0",
     "imageio>=2.9.0",
@@ -46,7 +41,6 @@ dependencies = [
 ndslice = "ndslice.__main__:main"
 
 [project.optional-dependencies]
-pyqt6 = ["PyQt6>=6.4.0"]
 dev = [
     "build>=0.10.0",
     "twine>=4.0.0",

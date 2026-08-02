@@ -1,13 +1,7 @@
 import numpy as np
 import os
-from pyqtgraph.Qt import QtWidgets, QtCore, QtGui
+from PyQt6 import QtCore, QtGui, QtWidgets
 from .range_slider import RangeSlider
-
-# Compatibility for PyQt5/PySide6 signal naming
-try:
-    Signal = QtCore.pyqtSignal
-except AttributeError:
-    Signal = QtCore.Signal
 
 # Try to import imageio for MP4/WebM support
 try:
@@ -19,26 +13,10 @@ except ImportError:
     HAS_IMAGEIO = False
 
 
-def _message_box_enum(enum_group, enum_name, fallback_name=None):
-    """Return a QMessageBox enum value across Qt5 and Qt6 bindings."""
-    message_box = QtWidgets.QMessageBox
-    group = getattr(message_box, enum_group, None)
-    if group is not None and hasattr(group, enum_name):
-        return getattr(group, enum_name)
-    return getattr(message_box, fallback_name or enum_name)
-
-
-def _exec_dialog(dialog):
-    """Execute a dialog across Qt5 and Qt6 bindings."""
-    if hasattr(dialog, "exec"):
-        return dialog.exec()
-    return dialog.exec_()
-
-
 class VideoExportWorker(QtCore.QThread):
     """Worker thread for video export with progress signals"""
-    progress_updated = Signal(int, str)  # (current_frame, status_text)
-    export_finished = Signal(bool, str)  # (success, message)
+    progress_updated = QtCore.pyqtSignal(int, str)  # (current_frame, status_text)
+    export_finished = QtCore.pyqtSignal(bool, str)  # (success, message)
     
     def __init__(self, data, export_dim, output_path, fps, format_type, 
                  channel_func, processing_func, slice_indices, selected_indices, 
@@ -454,7 +432,7 @@ class VideoExportDialog(QtWidgets.QDialog):
         self.worker.start()
         
         # Show dialog
-        _exec_dialog(self)
+        self.exec()
     
     def on_progress_updated(self, frame_idx, status_text):
         """Update progress display"""
@@ -472,14 +450,14 @@ class VideoExportDialog(QtWidgets.QDialog):
         if success:
             # Show a message box with optional buttons to open dir or file
             mb = QtWidgets.QMessageBox(self)
-            mb.setIcon(_message_box_enum("Icon", "Information"))
+            mb.setIcon(QtWidgets.QMessageBox.Icon.Information)
             mb.setWindowTitle("Export Complete")
             mb.setText(message)
-            action_role = _message_box_enum("ButtonRole", "ActionRole")
+            action_role = QtWidgets.QMessageBox.ButtonRole.ActionRole
             open_dir_btn = mb.addButton("Open directory", action_role)
             open_file_btn = mb.addButton("Open video", action_role)
-            ok_btn = mb.addButton(_message_box_enum("StandardButton", "Ok"))
-            _exec_dialog(mb)
+            mb.addButton(QtWidgets.QMessageBox.StandardButton.Ok)
+            mb.exec()
 
             clicked = mb.clickedButton()
             try:

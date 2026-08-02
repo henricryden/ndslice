@@ -2,6 +2,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/ndslice.svg)](https://pypi.org/project/ndslice/)
 [![License](https://img.shields.io/github/license/henricryden/ndslice.svg)](https://github.com/henricryden/ndslice/blob/main/LICENSE)
 [![Downloads](https://static.pepy.tech/personalized-badge/ndslice?period=total&units=international_system&left_color=black&right_color=green&left_text=downloads)](https://pepy.tech/projects/ndslice)
+[![SPEC 0 — Minimum Supported Dependencies](https://img.shields.io/badge/SPEC-0-green?labelColor=%23004811&color=%235CA038)](https://scientific-python.org/specs/spec-0000/)
 # ndslice
 
 **Quick interactive visualization for N-dimensional NumPy arrays**
@@ -167,17 +168,21 @@ pip install -e .
 
 ## Requirements
 
-- Python >= 3.8
-- NumPy >= 1.20.0
-- PyQtGraph >= 0.12.0
-- PyQt5 >= 5.15.0
+- Python >= 3.12
+- NumPy >= 2.2.0
+- SciPy >= 1.15.0
+- PyQtGraph >= 0.14.0
+- PyQt6 >= 6.8.0
 - h5py >= 3.0.0
-- scipy >= 1.7.0
 - pydicom >= 2.4.0
 - nibabel >= 4.0.0
 - imageio >= 2.9.0
 - imageio-ffmpeg >= 0.4.2
 - Pillow >= 8.0.0
+
+Python, NumPy, and SciPy minimum versions follow the rolling
+[SPEC 0](https://scientific-python.org/specs/spec-0000/) support policy and are
+refreshed for new releases.
 
 ## License
 

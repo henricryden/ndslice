@@ -1,7 +1,6 @@
 from pathlib import Path
 
-import pyqtgraph.Qt as Qt
-from pyqtgraph.Qt import QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .dicom_metadata import (
     compare_dicom_tags,
@@ -13,12 +12,6 @@ from .dicom_metadata import (
 DICOM_TAG_VIEW_LIMITED = 'limited'
 DICOM_TAG_VIEW_FULL = 'full'
 DICOM_TAG_VIEW_VARYING = 'varying'
-
-try:
-    DicomSignal = Qt.QtCore.pyqtSignal
-except AttributeError:
-    DicomSignal = Qt.QtCore.Signal
-
 
 _ACTIVE_VARIATION_WORKERS = set()
 
@@ -33,8 +26,8 @@ def _retain_variation_worker(worker):
     worker.finished.connect(release)
 
 
-class DicomVariationWorker(Qt.QtCore.QThread):
-    comparison_ready = DicomSignal(object)
+class DicomVariationWorker(QtCore.QThread):
+    comparison_ready = QtCore.pyqtSignal(object)
 
     def __init__(self, paths):
         super().__init__()
@@ -68,7 +61,7 @@ class DicomTagsDialog(QtWidgets.QDialog):
 
         self.setWindowTitle("DICOM tags")
         self.resize(820, 620)
-        self.setAttribute(Qt.QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
         layout = QtWidgets.QVBoxLayout(self)
         navigation_layout = QtWidgets.QHBoxLayout()
@@ -81,7 +74,7 @@ class DicomTagsDialog(QtWidgets.QDialog):
         navigation_layout.addWidget(self.follow_slice_checkbox)
 
         self.file_slider = QtWidgets.QSlider(
-            Qt.QtCore.Qt.Orientation.Horizontal,
+            QtCore.Qt.Orientation.Horizontal,
             self,
         )
         self.file_slider.setRange(0, max(0, len(records) - 1))
@@ -98,15 +91,15 @@ class DicomTagsDialog(QtWidgets.QDialog):
         navigation_layout.addStretch(1)
         self.group_label = QtWidgets.QLabel(self)
         self.group_label.setAlignment(
-            Qt.QtCore.Qt.AlignmentFlag.AlignRight
-            | Qt.QtCore.Qt.AlignmentFlag.AlignVCenter
+            QtCore.Qt.AlignmentFlag.AlignRight
+            | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
         navigation_layout.addWidget(self.group_label)
         layout.addLayout(navigation_layout)
 
         self.file_label = QtWidgets.QLabel(self)
         self.file_label.setTextInteractionFlags(
-            Qt.QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
         )
         self.file_label.setWordWrap(True)
         layout.addWidget(self.file_label)
@@ -151,12 +144,12 @@ class DicomTagsDialog(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
         self._previous_shortcut = QtGui.QShortcut(
-            QtGui.QKeySequence(Qt.QtCore.Qt.Key.Key_Left),
+            QtGui.QKeySequence(QtCore.Qt.Key.Key_Left),
             self,
         )
         self._previous_shortcut.activated.connect(self.show_previous)
         self._next_shortcut = QtGui.QShortcut(
-            QtGui.QKeySequence(Qt.QtCore.Qt.Key.Key_Right),
+            QtGui.QKeySequence(QtCore.Qt.Key.Key_Right),
             self,
         )
         self._next_shortcut.activated.connect(self.show_next)

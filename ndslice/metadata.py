@@ -2,8 +2,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-import pyqtgraph.Qt as Qt
-from pyqtgraph.Qt import QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 MASK_LABEL_MAX = 32
@@ -482,11 +481,11 @@ class MetadataDialog(QtWidgets.QDialog):
             name_label = QtWidgets.QLabel(name, parent)
             value_label = QtWidgets.QLabel(str(value), parent)
             value_label.setTextInteractionFlags(
-                Qt.QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-                | Qt.QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+                | QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
             )
             value_label.setWordWrap(True)
-            grid.addWidget(name_label, row, 0, alignment=Qt.QtCore.Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(name_label, row, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
             grid.addWidget(value_label, row, 1)
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)

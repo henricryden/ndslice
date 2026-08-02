@@ -1,17 +1,10 @@
-from pyqtgraph.Qt import QtGui, QtWidgets, QtCore
-
-
-QT_SIGNAL = getattr(QtCore, "Signal", None)
-if QT_SIGNAL is None:
-    QT_SIGNAL = getattr(QtCore, "pyqtSignal", None)
-if QT_SIGNAL is None:
-    raise AttributeError("Could not find Qt signal class: expected Signal or pyqtSignal")
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 class RangeSlider(QtWidgets.QWidget):
     """A minimal horizontal two-handle slider for inclusive integer ranges."""
 
-    valuesChanged = QT_SIGNAL(int, int)
+    valuesChanged = QtCore.pyqtSignal(int, int)
 
     def __init__(self, parent=None, minimum=0, maximum=0):
         super().__init__(parent)
@@ -74,13 +67,13 @@ class RangeSlider(QtWidgets.QWidget):
             event.ignore()
             return
 
-        point = self._event_point(event)
+        point = event.position()
         self._active_handle = self._closest_handle(point)
         self._move_active_handle(point.x())
         event.accept()
 
     def mouseMoveEvent(self, event):
-        point = self._event_point(event)
+        point = event.position()
         if self._active_handle is not None:
             self._move_active_handle(point.x())
             event.accept()
@@ -102,13 +95,6 @@ class RangeSlider(QtWidgets.QWidget):
     def leaveEvent(self, event):
         self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.ArrowCursor))
         super().leaveEvent(event)
-
-    def _event_point(self, event):
-        if hasattr(event, 'position'):
-            return event.position()
-        if hasattr(event, 'localPos'):
-            return event.localPos()
-        return QtCore.QPointF(event.pos())
 
     def _handle_radius(self):
         return 8.0

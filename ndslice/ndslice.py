@@ -1,7 +1,6 @@
 import numpy as np
+from PyQt6 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
-import pyqtgraph.Qt as Qt
-from pyqtgraph.Qt import QtWidgets, QtGui
 import os
 import math
 import platform
@@ -105,27 +104,21 @@ class Domain(Enum):
     NATIVE=0
     FOURIER=1
 
-QT_SIGNAL = getattr(Qt.QtCore, "Signal", None)
-if QT_SIGNAL is None:
-    QT_SIGNAL = getattr(Qt.QtCore, "pyqtSignal", None)
-if QT_SIGNAL is None:
-    raise AttributeError("Could not find Qt signal class: expected Signal or pyqtSignal")
-
 class MaskColorSwatch(QtWidgets.QWidget):
-    clicked = QT_SIGNAL()
+    clicked = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._colors = [MASK_COLOR_RGB["R"]]
         self.setFixedSize(28, 16)
-        self.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
 
     def setColors(self, colors):
         self._colors = list(colors) or [MASK_COLOR_RGB["R"]]
         self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.QtCore.Qt.MouseButton.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.clicked.emit()
             event.accept()
             return
@@ -136,13 +129,13 @@ class MaskColorSwatch(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         width = self.width() / len(self._colors)
         for index, color in enumerate(self._colors):
-            painter.setPen(Qt.QtCore.Qt.PenStyle.NoPen)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(QtGui.QColor(int(color[0]), int(color[1]), int(color[2])))
             left = int(round(index * width))
             right = int(round((index + 1) * width))
             painter.drawRect(left, 0, max(1, right - left), self.height())
 
-        painter.setBrush(Qt.QtCore.Qt.BrushStyle.NoBrush)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.setPen(QtGui.QColor(90, 90, 90))
         painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
 
@@ -162,7 +155,7 @@ class SaveRangeDialog(QtWidgets.QDialog):
 
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QtWidgets.QWidget()
         content_layout = QtWidgets.QVBoxLayout(content)
         content_layout.setContentsMargins(4, 4, 4, 4)
@@ -595,9 +588,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 }
             },
             'labels': {
-                'dims': [QtWidgets.QLabel('[' + str(data.shape[i]) + ']', alignment=Qt.QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
-                'flip': [QtWidgets.QLabel('', alignment=Qt.QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
-                'complex': [QtWidgets.QLabel('', alignment=Qt.QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
+                'dims': [QtWidgets.QLabel('[' + str(data.shape[i]) + ']', alignment=QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
+                'flip': [QtWidgets.QLabel('', alignment=QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
+                'complex': [QtWidgets.QLabel('', alignment=QtCore.Qt.AlignmentFlag.AlignCenter) for i in range(data.ndim)],
                 'primary': QtWidgets.QLabel('Y'),
                 'secondary': QtWidgets.QLabel('X'),
                 'slice': QtWidgets.QLabel('Slice'),
@@ -648,7 +641,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         
         for i, label in enumerate(self.widgets['labels']['dims']):
             label.mousePressEvent = lambda event, i=i, l=label: self.dimClicked(event, l, i)
-            label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+            label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
             label.setToolTip(f"Apply centered FFT along dim {i}")
 
         
@@ -656,14 +649,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         for i, flip_label in enumerate(self.widgets['labels']['flip']):
             flip_label.mousePressEvent = lambda event, i=i: self.flipAxisClicked(event, i)
             flip_label.setStyleSheet(self.FLIP_ICON_STYLE)
-            flip_label.setAlignment(Qt.QtCore.Qt.AlignmentFlag.AlignLeft | Qt.QtCore.Qt.AlignmentFlag.AlignVCenter)
+            flip_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
             self._set_emoji_font(flip_label)
         
         # Set up complex indicator labels with click handlers
         for i, complex_label in enumerate(self.widgets['labels']['complex']):
             complex_label.mousePressEvent = lambda event, i=i: self.complexOrRealClicked(event, i)
             complex_label.setStyleSheet(self.FLIP_ICON_STYLE)
-            complex_label.setAlignment(Qt.QtCore.Qt.AlignmentFlag.AlignRight | Qt.QtCore.Qt.AlignmentFlag.AlignVCenter)
+            complex_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             self._set_emoji_font(complex_label)
         
         # Apply compact styling to dimension control widgets
@@ -708,7 +701,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             # Add flip icon (left-aligned)
             label_layout.addWidget(self.widgets['labels']['flip'][i])
             # Add dimension label (centered, takes remaining space)
-            self.widgets['labels']['dims'][i].setAlignment(Qt.QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.widgets['labels']['dims'][i].setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             label_layout.addWidget(self.widgets['labels']['dims'][i], 1)
             # Add complex indicator (ℝ/ℂ)
             label_layout.addWidget(self.widgets['labels']['complex'][i])
@@ -815,7 +808,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.mask_visible_checkbox.toggled.connect(self._on_mask_visibility_changed)
         mask_layout.addWidget(self.mask_visible_checkbox)
 
-        self.mask_opacity_slider = QtWidgets.QSlider(Qt.QtCore.Qt.Orientation.Horizontal)
+        self.mask_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.mask_opacity_slider.setRange(0, 100)
         self.mask_opacity_slider.setValue(int(round(self._mask_opacity * 100)))
         self.mask_opacity_slider.setFixedWidth(90)
@@ -872,9 +865,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 if self._owner is None or not self._owner.is_line_plot_mode():
                     return super().wheelEvent(ev)
                 modifiers = ev.modifiers()
-                ctrl = modifiers & Qt.QtCore.Qt.KeyboardModifier.ControlModifier
-                shift = modifiers & Qt.QtCore.Qt.KeyboardModifier.ShiftModifier
-                # Angle delta: use y for typical vertical wheel (Qt6: angleDelta)
+                ctrl = modifiers & QtCore.Qt.KeyboardModifier.ControlModifier
+                shift = modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier
+                # pyqtgraph wheel events expose delta(), while Qt events use angleDelta().
                 delta = ev.delta() if hasattr(ev, 'delta') else ev.angleDelta().y()
                 if delta == 0:
                     return
@@ -1066,7 +1059,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # OS-native events: inotify on Linux, FSEvents on macOS, ReadDirectoryChanges on Windows)
         self._file_watcher = None
         if filepath is not None:
-            self._file_watcher = Qt.QtCore.QFileSystemWatcher([str(filepath)])
+            self._file_watcher = QtCore.QFileSystemWatcher([str(filepath)])
             self._file_watcher.fileChanged.connect(self._on_file_changed)
 
 
@@ -1141,10 +1134,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         label.mousePressEvent = self._pixel_value_indicator_clicked
         transform, unavailable_reason = self._pixel_context_scaling()
         if self._pixel_value_scaling is None or (transform is None and unavailable_reason is None):
-            label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.ArrowCursor))
+            label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.ArrowCursor))
             label.setToolTip('')
             return
-        label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+        label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         if unavailable_reason:
             label.setToolTip(
                 "The current value cannot be unscaled; use Apply intensity scaling to reload raw values"
@@ -1629,7 +1622,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         colormap_label = QtWidgets.QLabel("Default colormap")
         self._colormap_combo = QtWidgets.QComboBox(colormap_row)
-        self._colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        self._colormap_combo.setIconSize(QtCore.QSize(96, 16))
         for colormap_name in COLORMAP_NAMES:
             self._colormap_combo.addItem(self._colormap_icon(colormap_name), colormap_name)
 
@@ -1654,7 +1647,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         angle_colormap_label = QtWidgets.QLabel("Angle colormap")
         self._angle_colormap_combo = QtWidgets.QComboBox(angle_colormap_row)
-        self._angle_colormap_combo.setIconSize(Qt.QtCore.QSize(96, 16))
+        self._angle_colormap_combo.setIconSize(QtCore.QSize(96, 16))
         self._angle_colormap_combo.addItem("Same", ANGLE_COLORMAP_SAME)
         for colormap_name in COLORMAP_NAMES:
             self._angle_colormap_combo.addItem(
@@ -1949,7 +1942,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _colormap_icon(self, colormap_name):
         pixmap = QtGui.QPixmap(96, 16)
-        pixmap.fill(Qt.QtCore.Qt.GlobalColor.transparent)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
         painter = QtGui.QPainter(pixmap)
 
         try:
@@ -2048,7 +2041,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('black'))
             label.setStyleSheet("font-weight: normal;")
             self._apply_fft(dim)  # Undo the IFFT by applying FFT
-        elif event.button() == Qt.QtCore.Qt.MouseButton.RightButton:
+        elif event.button() == QtCore.Qt.MouseButton.RightButton:
             # Right click from native: apply IFFT
             self.domain[dim] = Domain.INV_FOURIER
             p.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor('green'))
@@ -2093,7 +2086,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 # In line plot mode, only show horizontal flip icon for the plot dimension
                 if self.is_line_plot_mode():
                     if i == self.line_plot_dimension:
-                        flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.SizeHorCursor))
+                        flip_label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.SizeHorCursor))
                         flip_label.setToolTip("Flip X axis")
                         if self.axis_flipped[i]:
                             flip_label.setText('⬅️')    
@@ -2104,14 +2097,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                         flip_label.setToolTip('')
                 # In image view mode, show vertical flip for primary, horizontal for secondary
                 elif i == self.selected_indices[0]:
-                    flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.SizeVerCursor))
+                    flip_label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.SizeVerCursor))
                     flip_label.setToolTip("Flip Y")
                     if self.axis_flipped[i]:
                         flip_label.setText('⬇️')
                     else:
                         flip_label.setText('⬆️')
                 elif len(self.selected_indices) > 1 and i == self.selected_indices[1]:
-                    flip_label.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.SizeHorCursor))
+                    flip_label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.SizeHorCursor))
                     flip_label.setToolTip("Flip X")
                     if self.axis_flipped[i]:
                         flip_label.setText('⬅️')
@@ -2152,18 +2145,18 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             if self.combined_as_complex[i]:
                 indicator.setText('ℂ')
                 indicator.setStyleSheet(self.FLIP_ICON_STYLE + " QLabel {font-weight: bold; }")
-                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+                indicator.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
                 indicator.setToolTip(f'Split to real')
             elif self.can_combine_as_complex[i]:
                 indicator.setText('ℝ')
                 indicator.setStyleSheet(self.FLIP_ICON_STYLE + " QLabel {font-weight: bold; }")
-                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.PointingHandCursor))
+                indicator.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
                 indicator.setToolTip(f'Combine as complex')
             else:
                 # No indicator, already-complex data or non-size-2 dimensions
                 indicator.setText('')
                 indicator.setToolTip('')
-                indicator.setCursor(QtGui.QCursor(Qt.QtCore.Qt.CursorShape.ArrowCursor))
+                indicator.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.ArrowCursor))
 
     def _update_channel_controls(self):
         """Keep channel options in sync with the current array dtype."""
@@ -2711,19 +2704,15 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         delta = event.angleDelta().y()
         if delta == 0:
             delta = event.angleDelta().x()
-        if delta == 0 and hasattr(event, 'pixelDelta'):
+        if delta == 0:
             delta = event.pixelDelta().y()
         if delta == 0:
             return 0
-        multiplier = 10 if event.modifiers() & Qt.QtCore.Qt.KeyboardModifier.AltModifier else 1
+        multiplier = 10 if event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier else 1
         return multiplier if delta > 0 else -multiplier
 
     def _event_pos(self, event):
-        if hasattr(event, 'pos'):
-            return event.pos()
-        if hasattr(event, 'position'):
-            return event.position().toPoint()
-        return Qt.QtCore.QPoint()
+        return event.position().toPoint()
 
     def _on_plot_range_changed(self, vb, ranges):
         """Adapt line pen thickness based on horizontal zoom.
@@ -2922,23 +2911,23 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         modifiers = event.modifiers()
         
         # Check for 'T' key to transpose view (swap X and Y dimensions)
-        if key == Qt.QtCore.Qt.Key.Key_T and modifiers == Qt.QtCore.Qt.KeyboardModifier.NoModifier:
+        if key == QtCore.Qt.Key.Key_T and modifiers == QtCore.Qt.KeyboardModifier.NoModifier:
             if not self.is_line_plot_mode() and len(self.selected_indices) >= 2:
                 self.transposeView(event)
                 event.accept()
                 return
         
         # Check CTRL+number for colormap changes
-        if modifiers == Qt.QtCore.Qt.KeyboardModifier.ControlModifier:
+        if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
             shortcut_keys = (
-                Qt.QtCore.Qt.Key.Key_1,
-                Qt.QtCore.Qt.Key.Key_2,
-                Qt.QtCore.Qt.Key.Key_3,
-                Qt.QtCore.Qt.Key.Key_4,
-                Qt.QtCore.Qt.Key.Key_5,
-                Qt.QtCore.Qt.Key.Key_6,
-                Qt.QtCore.Qt.Key.Key_7,
-                Qt.QtCore.Qt.Key.Key_8,
+                QtCore.Qt.Key.Key_1,
+                QtCore.Qt.Key.Key_2,
+                QtCore.Qt.Key.Key_3,
+                QtCore.Qt.Key.Key_4,
+                QtCore.Qt.Key.Key_5,
+                QtCore.Qt.Key.Key_6,
+                QtCore.Qt.Key.Key_7,
+                QtCore.Qt.Key.Key_8,
             )
             shortcut_map = dict(zip(shortcut_keys, COLORMAP_NAMES))
             if key in shortcut_map:
@@ -3069,12 +3058,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     
     def eventFilter(self, obj, event):
         if obj == self.tab_widget.tabBar():
-            if event.type() == Qt.QtCore.QEvent.Type.MouseMove:
+            if event.type() == QtCore.QEvent.Type.MouseMove:
                 tab_bar = self.tab_widget.tabBar()
                 self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
-            elif event.type() == Qt.QtCore.QEvent.Type.Leave:
+            elif event.type() == QtCore.QEvent.Type.Leave:
                 self._set_line_tab_hovered(False)
-            elif event.type() == Qt.QtCore.QEvent.Type.Wheel:
+            elif event.type() == QtCore.QEvent.Type.Wheel:
                 tab_bar = self.tab_widget.tabBar()
                 self._set_line_tab_hovered(tab_bar.tabAt(self._event_pos(event)) == 1)
                 if self._line_slice_preview_is_visible():
@@ -3082,7 +3071,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                         event.accept()
                         return True
 
-            if event.type() == Qt.QtCore.QEvent.Type.MouseButtonDblClick:
+            if event.type() == QtCore.QEvent.Type.MouseButtonDblClick:
                 # which tab was double-clicked
                 tab_bar = self.tab_widget.tabBar()
                 clicked_index = tab_bar.tabAt(self._event_pos(event))
@@ -3103,8 +3092,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             prim_btn = self.widgets['buttons']['primary'][i]
             sec_btn = self.widgets['buttons']['secondary'][i]
             
-            prim_btn.setContextMenuPolicy(Qt.QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-            sec_btn.setContextMenuPolicy(Qt.QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+            prim_btn.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+            sec_btn.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
             
             prim_btn.customContextMenuRequested.connect(lambda pos, btn=prim_btn, dim=i: self._show_export_context_menu(pos, btn, dim))
             sec_btn.customContextMenuRequested.connect( lambda pos, btn=sec_btn,  dim=i: self._show_export_context_menu(pos, btn, dim))

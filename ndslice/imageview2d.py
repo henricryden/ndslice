@@ -1,5 +1,5 @@
 import numpy as np
-from pyqtgraph.Qt import QtGui, QtWidgets
+from PyQt6 import QtGui, QtWidgets
 import pyqtgraph as pg
 from pyqtgraph.graphicsItems.ImageItem import ImageItem
 from pyqtgraph.graphicsItems.ViewBox import ViewBox

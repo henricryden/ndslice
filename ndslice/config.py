@@ -2,12 +2,9 @@
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from platformdirs import user_config_dir
+import tomllib
 
-try:
-    import tomllib
-except ImportError:  # pragma: no cover - exercised only on Python < 3.11
-    import tomli as tomllib
+from platformdirs import user_config_dir
 
 
 INITIAL_INDEX_FIRST = "first"
