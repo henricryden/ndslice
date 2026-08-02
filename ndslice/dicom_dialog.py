@@ -12,8 +12,260 @@ from .dicom_metadata import (
 DICOM_TAG_VIEW_LIMITED = 'limited'
 DICOM_TAG_VIEW_FULL = 'full'
 DICOM_TAG_VIEW_VARYING = 'varying'
+DICOM_SEARCH_MATCH_ROLE = int(QtCore.Qt.ItemDataRole.UserRole) + 1
 
 _ACTIVE_VARIATION_WORKERS = set()
+
+
+def _folded_text(text):
+    folded = []
+    source_positions = []
+    for index, character in enumerate(text):
+        character_folded = character.casefold()
+        folded.append(character_folded)
+        source_positions.extend([index] * len(character_folded))
+    return ''.join(folded), source_positions
+
+
+def _contiguous_match(text, folded, source_positions, term):
+    if folded == term:
+        return (4, 0, 0), set(source_positions)
+
+    best = None
+    start = folded.find(term)
+    while start >= 0:
+        source_start = source_positions[start]
+        word_start = source_start == 0 or not text[source_start - 1].isalnum()
+        score = (3 if word_start else 2, 0, -start)
+        positions = set(source_positions[start:start + len(term)])
+        candidate = score, positions
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+        start = folded.find(term, start + 1)
+    return best
+
+
+def _gapped_match(folded, source_positions, term):
+    search_start = 0
+    best = None
+    while search_start < len(folded):
+        term_index = 0
+        text_index = search_start
+        while text_index < len(folded) and term_index < len(term):
+            if folded[text_index] == term[term_index]:
+                term_index += 1
+            text_index += 1
+        if term_index < len(term):
+            break
+
+        term_index = len(term) - 1
+        match_index = text_index - 1
+        positions = []
+        while term_index >= 0:
+            if folded[match_index] == term[term_index]:
+                positions.append(match_index)
+                term_index -= 1
+            match_index -= 1
+        positions.reverse()
+
+        gaps = positions[-1] - positions[0] + 1 - len(term)
+        score = (1, -gaps, -positions[0])
+        source_matches = {source_positions[index] for index in positions}
+        candidate = score, source_matches
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+        search_start = positions[0] + 1
+    return best
+
+
+def _fuzzy_cell_match(text, term):
+    folded, source_positions = _folded_text(text)
+    if not folded or not term:
+        return None
+
+    contiguous = _contiguous_match(text, folded, source_positions, term)
+    if contiguous is not None:
+        return contiguous
+    return _gapped_match(folded, source_positions, term)
+
+
+def _filtered_tag_rows(rows, query):
+    terms = [term.casefold() for term in query.split() if term]
+    if not terms or (len(rows) == 1 and not rows[0][0]):
+        return [(row, ((), (), ())) for row in rows]
+
+    ranked_rows = []
+    for original_index, row in enumerate(rows):
+        column_matches = [set(), set(), set()]
+        term_scores = []
+        for term in terms:
+            matches = []
+            for column, value in enumerate(row):
+                match = _fuzzy_cell_match(value, term)
+                if match is None:
+                    continue
+                score, positions = match
+                matches.append((score, -column))
+                column_matches[column].update(positions)
+            if not matches:
+                break
+            term_scores.append(max(matches)[0])
+        else:
+            quality = sum(score[0] for score in term_scores)
+            exact_matches = sum(score[0] == 4 for score in term_scores)
+            boundary_matches = sum(score[0] == 3 for score in term_scores)
+            contiguous_matches = sum(score[0] == 2 for score in term_scores)
+            gaps = -sum(score[1] for score in term_scores)
+            starts = -sum(score[2] for score in term_scores)
+            sort_key = (
+                -quality,
+                -exact_matches,
+                -boundary_matches,
+                -contiguous_matches,
+                gaps,
+                starts,
+                original_index,
+            )
+            ranked_rows.append((sort_key, row, column_matches))
+
+    ranked_rows.sort(key=lambda result: result[0])
+    return [
+        (row, tuple(tuple(sorted(matches)) for matches in column_matches))
+        for _sort_key, row, column_matches in ranked_rows
+    ]
+
+
+def _elided_source_positions(source, displayed):
+    if source == displayed:
+        return list(range(len(source)))
+
+    prefix_length = 0
+    prefix_limit = min(len(source), len(displayed))
+    while (
+            prefix_length < prefix_limit
+            and source[prefix_length] == displayed[prefix_length]):
+        prefix_length += 1
+
+    suffix_length = 0
+    suffix_limit = min(
+        len(source) - prefix_length,
+        len(displayed) - prefix_length,
+    )
+    while (
+            suffix_length < suffix_limit
+            and source[-suffix_length - 1] == displayed[-suffix_length - 1]):
+        suffix_length += 1
+
+    positions = list(range(prefix_length))
+    positions.extend([None] * (len(displayed) - prefix_length - suffix_length))
+    if suffix_length:
+        positions.extend(range(len(source) - suffix_length, len(source)))
+    return positions
+
+
+class DicomSearchHighlightDelegate(QtWidgets.QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        matches = index.data(DICOM_SEARCH_MATCH_ROLE)
+        if not matches:
+            super().paint(painter, option, index)
+            return
+
+        styled_option = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(styled_option, index)
+        text = styled_option.text
+        style = (
+            styled_option.widget.style()
+            if styled_option.widget is not None
+            else QtWidgets.QApplication.style()
+        )
+        text_rect = style.subElementRect(
+            QtWidgets.QStyle.SubElement.SE_ItemViewItemText,
+            styled_option,
+            styled_option.widget,
+        )
+        displayed_text = styled_option.fontMetrics.elidedText(
+            text,
+            styled_option.textElideMode,
+            text_rect.width(),
+        )
+        displayed_positions = _elided_source_positions(text, displayed_text)
+        highlighted = {
+            displayed_index
+            for displayed_index, source_index in enumerate(displayed_positions)
+            if source_index in matches
+        }
+
+        styled_option.text = ''
+        style.drawControl(
+            QtWidgets.QStyle.ControlElement.CE_ItemViewItem,
+            styled_option,
+            painter,
+            styled_option.widget,
+        )
+
+        selected = bool(
+            option.state & QtWidgets.QStyle.StateFlag.State_Selected
+        )
+        palette = styled_option.palette
+        text_role = (
+            QtGui.QPalette.ColorRole.HighlightedText
+            if selected else QtGui.QPalette.ColorRole.Text
+        )
+        match_background_role = (
+            QtGui.QPalette.ColorRole.Base
+            if selected else QtGui.QPalette.ColorRole.Highlight
+        )
+        match_text_role = (
+            QtGui.QPalette.ColorRole.Text
+            if selected else QtGui.QPalette.ColorRole.HighlightedText
+        )
+
+        formats = []
+        base_format = QtGui.QTextLayout.FormatRange()
+        base_format.start = 0
+        base_format.length = len(displayed_text)
+        base_format.format.setForeground(palette.color(text_role))
+        formats.append(base_format)
+
+        highlighted = sorted(highlighted)
+        range_start = None
+        previous = None
+        for displayed_index in highlighted + [None]:
+            if (
+                    range_start is not None
+                    and displayed_index != previous + 1):
+                match_format = QtGui.QTextLayout.FormatRange()
+                match_format.start = range_start
+                match_format.length = previous - range_start + 1
+                match_format.format.setBackground(
+                    palette.color(match_background_role)
+                )
+                match_format.format.setForeground(palette.color(match_text_role))
+                formats.append(match_format)
+                range_start = None
+            if displayed_index is not None and range_start is None:
+                range_start = displayed_index
+            previous = displayed_index
+
+        text_layout = QtGui.QTextLayout(displayed_text, styled_option.font)
+        text_layout.setFormats(formats)
+        text_layout.beginLayout()
+        line = text_layout.createLine()
+        if line.isValid():
+            line.setLineWidth(text_rect.width())
+        text_layout.endLayout()
+
+        painter.save()
+        painter.setClipRect(text_rect)
+        vertical_offset = max(
+            0.0,
+            (text_rect.height() - text_layout.boundingRect().height()) / 2,
+        )
+        text_layout.draw(
+            painter,
+            QtCore.QPointF(text_rect.x(), text_rect.y() + vertical_offset),
+        )
+        painter.restore()
 
 
 def _retain_variation_worker(worker):
@@ -104,6 +356,18 @@ class DicomTagsDialog(QtWidgets.QDialog):
         self.file_label.setWordWrap(True)
         layout.addWidget(self.file_label)
 
+        search_layout = QtWidgets.QHBoxLayout()
+        search_label = QtWidgets.QLabel("Search:", self)
+        self.search_field = QtWidgets.QLineEdit(self)
+        self.search_field.setPlaceholderText("Search tags…")
+        self.search_field.setClearButtonEnabled(True)
+        self.search_field.setAccessibleName("Search DICOM tags")
+        self.search_field.textChanged.connect(self._on_search_changed)
+        search_label.setBuddy(self.search_field)
+        search_layout.addWidget(search_label)
+        search_layout.addWidget(self.search_field, 1)
+        layout.addLayout(search_layout)
+
         self.tag_table = QtWidgets.QTableWidget(self)
         self.tag_table.setColumnCount(3)
         self.tag_table.setHorizontalHeaderLabels(["Tag", "Name", "Value"])
@@ -114,6 +378,9 @@ class DicomTagsDialog(QtWidgets.QDialog):
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.tag_table.setAlternatingRowColors(True)
+        self.tag_table.setItemDelegate(
+            DicomSearchHighlightDelegate(self.tag_table)
+        )
         self.tag_table.verticalHeader().setVisible(False)
         header = self.tag_table.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
@@ -153,6 +420,11 @@ class DicomTagsDialog(QtWidgets.QDialog):
             self,
         )
         self._next_shortcut.activated.connect(self.show_next)
+        self._search_shortcut = QtGui.QShortcut(
+            QtGui.QKeySequence.StandardKey.Find,
+            self,
+        )
+        self._search_shortcut.activated.connect(self._focus_search)
 
         self._show_record(self.current_index, preserve_status=True)
 
@@ -237,14 +509,33 @@ class DicomTagsDialog(QtWidgets.QDialog):
         if self._dataset is None:
             return
 
-        rows = self._rows_for_current_view()
+        rows = _filtered_tag_rows(
+            self._rows_for_current_view(),
+            self.search_field.text(),
+        )
+        if self.search_field.text().strip() and not rows:
+            rows = [(('', 'No matching tags', ''), ((), (), ()))]
+
         self.tag_table.setRowCount(len(rows))
-        for row, values in enumerate(rows):
+        for row, (values, column_matches) in enumerate(rows):
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
                 item.setToolTip(value)
+                if column_matches[column]:
+                    item.setData(
+                        DICOM_SEARCH_MATCH_ROLE,
+                        column_matches[column],
+                    )
                 self.tag_table.setItem(row, column, item)
         self._restore_table_position(position_state)
+
+    def _on_search_changed(self, _text):
+        if self._dataset is not None:
+            self._populate_table()
+
+    def _focus_search(self):
+        self.search_field.setFocus()
+        self.search_field.selectAll()
 
     def _update_status_label(self):
         statuses = [
