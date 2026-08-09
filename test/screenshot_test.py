@@ -8,6 +8,7 @@ headlessly, and saves a PNG. Run via:
 import sys
 import numpy as np
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 def make_data():
@@ -77,56 +78,72 @@ def flush_qt_events(app, count=5):
 
 def main():
     import argparse
-    import pyqtgraph as pg
+    from ndslice.config import SUPPORTED_COLOR_SCHEMES
     from ndslice.ndslice import NDSliceWindow
+    from ndslice.qt_application import get_qapplication
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--style', default=None,
                         help='Optional Qt style override, e.g. Fusion or Windows')
+    parser.add_argument(
+        '--color-scheme',
+        choices=SUPPORTED_COLOR_SCHEMES,
+        default='system',
+        help='Color scheme to render (default: system)',
+    )
     parser.add_argument('--out', default=None,
                         help='Output directory for screenshot (default: test/screenshots/)')
     args = parser.parse_args()
 
     data = make_data()
 
-    app = pg.mkQApp()
-    if args.style:
-        app.setStyle(args.style)
-    win = NDSliceWindow(data)
-    style_name = args.style or app.style().objectName()
-    win.setWindowTitle(f"CI test — {sys.platform} — style: {style_name}")
-    win.resize(800, 800)
-    win.show()
+    with TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "config.toml"
+        config_path.write_text(
+            f'[display]\ncolor_scheme = "{args.color_scheme}"\n',
+            encoding='utf-8',
+        )
+        app = get_qapplication(config_path)
+        if args.style:
+            app.setStyle(args.style)
+        win = NDSliceWindow(data, config_path=config_path)
+        style_name = args.style or app.style().objectName()
+        win.setWindowTitle(
+            f"CI test — {sys.platform} — style: {style_name} — {args.color_scheme}"
+        )
+        win.resize(800, 800)
+        win.show()
 
-    # Let Qt process events so the image actually renders
-    flush_qt_events(app)
+        # Let Qt process events so the image actually renders
+        flush_qt_events(app)
 
-    out_dir = Path(args.out) if args.out else Path(__file__).parent / "screenshots"
-    out = out_dir / f"screenshot_{sys.platform}.png"
-    take_screenshot(win, out)
+        out_dir = Path(args.out) if args.out else Path(__file__).parent / "screenshots"
+        suffix = "" if args.color_scheme == "system" else f"_{args.color_scheme}"
+        out = out_dir / f"screenshot{suffix}_{sys.platform}.png"
+        take_screenshot(win, out)
 
-    button = win._settings_btn
-    menu_pos = button.mapToGlobal(button.rect().bottomLeft())
-    win._settings_menu.popup(menu_pos)
-    flush_qt_events(app)
-    assert win._settings_menu.isVisible(), "Settings menu did not open"
+        button = win._settings_btn
+        menu_pos = button.mapToGlobal(button.rect().bottomLeft())
+        win._settings_menu.popup(menu_pos)
+        flush_qt_events(app)
+        assert win._settings_menu.isVisible(), "Settings menu did not open"
 
-    combo = win._colormap_combo
-    combo.showPopup()
-    flush_qt_events(app)
+        combo = win._colormap_combo
+        combo.showPopup()
+        flush_qt_events(app)
 
-    settings_out = out_dir / f"screenshot_settings_menu_{sys.platform}.png"
-    take_widget_composite_screenshot(
-        [win._settings_menu, combo.view().window()],
-        settings_out,
-    )
+        settings_out = out_dir / f"screenshot_settings_menu{suffix}_{sys.platform}.png"
+        take_widget_composite_screenshot(
+            [win._settings_menu, combo.view().window()],
+            settings_out,
+        )
 
-    combo.hidePopup()
-    win._settings_menu.hide()
-    flush_qt_events(app)
+        combo.hidePopup()
+        win._settings_menu.hide()
+        flush_qt_events(app)
 
-    win.close()
-    app.quit()
+        win.close()
+        app.quit()
     print("All checks passed.")
 
 
