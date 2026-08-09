@@ -40,6 +40,16 @@ jobs:
         if: runner.os != 'Linux'
         run: python test/screenshot_test.py
 
+      - name: Run dark-mode screenshot test (Linux)
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test/screenshot_test.py --color-scheme dark
+
+      - name: Run dark-mode screenshot test (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: python test/screenshot_test.py --color-scheme dark
+
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
