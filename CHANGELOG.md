@@ -5,7 +5,8 @@
 
 ### Added
 - Native light/dark appearance support with persistent System, Light, and Dark settings.
-- Metadata and DICOM tag inspection
+- Array metadata dialog and DICOM tag browser with fuzzy search.
+- Configurable DICOM/NIfTI intensity scaling (scaled/raw pixel values)
 
 ### Changed
 - PyQt6 6.8 or newer is now required (PyQt5 support removed)
