@@ -41,7 +41,7 @@ jobs:
         run: python test/screenshot_test.py
 
       - name: Upload screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshots-${{ matrix.os }}-py${{ matrix.python-version }}
           path: test/screenshots/
