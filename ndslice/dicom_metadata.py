@@ -46,6 +46,8 @@ DICOM_NAVIGATION_TAGS = (
     'InstanceNumber',
     'SeriesNumber',
     'EchoNumbers',
+    'EchoTime',
+    'InversionTime',
     'AcquisitionNumber',
     'TemporalPositionIdentifier',
     'ImagePositionPatient',
@@ -55,6 +57,18 @@ DICOM_NAVIGATION_TAGS = (
     'ProtocolName',
     'FlipAngle',
     'DiffusionBValue',
+)
+
+
+DICOM_VOLUME_FIELDS = (
+    ('SeriesNumber', 'series_number', 'series'),
+    ('EchoNumber', 'echo_number', 'echoes'),
+    ('EchoTime', 'echo_time', 'echo times'),
+    ('FlipAngle', 'flip_angle', 'flip angles'),
+    ('DiffusionBValue', 'diffusion_b_value', 'b-values'),
+    ('InversionTime', 'inversion_time', 'inversion times'),
+    ('TemporalPositionIdentifier', 'temporal_position', 'time points'),
+    ('AcquisitionNumber', 'acquisition_number', 'acquisitions'),
 )
 
 DICOM_BINARY_VRS = {'OB', 'OD', 'OF', 'OL', 'OV', 'OW', 'UN'}
@@ -243,8 +257,10 @@ def dicom_header_record(path, directory_path=None, dataset=None):
         'instance_number': 'InstanceNumber',
         'series_number': 'SeriesNumber',
         'echo_number': 'EchoNumbers',
+        'echo_time': 'EchoTime',
         'acquisition_number': 'AcquisitionNumber',
         'temporal_position': 'TemporalPositionIdentifier',
+        'inversion_time': 'InversionTime',
         'image_position_patient': 'ImagePositionPatient',
         'image_orientation_patient': 'ImageOrientationPatient',
         'pixel_spacing': 'PixelSpacing',
@@ -425,6 +441,72 @@ def _dicom_group_label(record, output_index, stacking_label, stacking_values):
         return str(description)
     series_number = record.get('series_number')
     return f"series {series_number}" if series_number is not None else ''
+
+
+def _uniform_output_values(records, output_count, record_key):
+    values = []
+    for output_index in range(output_count):
+        output_values = {
+            _normalized_match_value(record.get(record_key))
+            for record in records
+            if record.get('output_index') == output_index
+            and record.get(record_key) is not None
+        }
+        if len(output_values) != 1:
+            return None
+
+        normalized_value = next(iter(output_values))
+        values.append(next(
+            record[record_key]
+            for record in records
+            if record.get('output_index') == output_index
+            and _normalized_match_value(record.get(record_key)) == normalized_value
+        ))
+    return values
+
+
+def describe_dicom_volume_stack(output_metadata, records):
+    """Describe dcm2niix outputs from their source DICOM headers when possible."""
+    output_count = len(output_metadata)
+    if output_count < 2:
+        return None, None, None
+
+    for sidecar_key, record_key, label in DICOM_VOLUME_FIELDS:
+        values = _uniform_output_values(records, output_count, record_key)
+        if values is not None and len({
+            _normalized_match_value(value) for value in values
+        }) > 1:
+            return label, sidecar_key, values
+
+    for sidecar_key, _record_key, label in DICOM_VOLUME_FIELDS:
+        values = [metadata.get(sidecar_key) for metadata in output_metadata]
+        if any(value is not None for value in values) and len({
+            _normalized_match_value(value) for value in values
+        }) > 1:
+            return label, sidecar_key, values
+
+    names = [
+        metadata.get('ProtocolName') or metadata.get('SeriesDescription')
+        for metadata in output_metadata
+    ]
+    if any(name for name in names) and len(set(names)) > 1:
+        return 'series', 'SeriesDescription', names
+
+    return 'series', None, None
+
+
+def set_dicom_record_group_labels(records, stacking_label, stacking_values):
+    """Update DICOM record labels after the converted outputs are described."""
+    for record in records:
+        output_index = record.get('output_index')
+        if not isinstance(output_index, int):
+            continue
+        record['group_label'] = _dicom_group_label(
+            record,
+            output_index,
+            stacking_label,
+            stacking_values,
+        )
 
 
 def build_dicom_file_records(

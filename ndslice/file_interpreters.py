@@ -9,7 +9,9 @@ import shutil
 
 from .dicom_metadata import (
     build_dicom_file_records,
+    describe_dicom_volume_stack,
     find_dicom_files,
+    set_dicom_record_group_labels,
     single_dicom_file_record,
 )
 
@@ -482,27 +484,6 @@ def _read_json_sidecar(json_path):
         return json.load(json_file)
 
 
-def _describe_stacking_axis(sidecar_metadata):
-    axis_candidates = [
-        ('EchoNumber', 'echoes'),
-        ('FlipAngle', 'flip angles'),
-        ('DiffusionBValue', 'b-values'),
-        ('SeriesNumber', 'series'),
-        ('AcquisitionNumber', 'acquisitions'),
-    ]
-
-    for key, label in axis_candidates:
-        values = [metadata.get(key) for metadata in sidecar_metadata]
-        if any(value is not None for value in values) and len(set(values)) > 1:
-            return label, key, values
-
-    names = [metadata.get('ProtocolName') or metadata.get('SeriesDescription') for metadata in sidecar_metadata]
-    if any(name for name in names) and len(set(names)) > 1:
-        return 'series', 'SeriesDescription', names
-
-    return 'series', None, None
-
-
 def _run_dcm2niix(directory_path, output_dir):
     dcm2niix_path = shutil.which('dcm2niix')
     if dcm2niix_path is None:
@@ -593,6 +574,16 @@ class DicomDirectoryLoader:
                 stacking_label = None
                 stacking_key = None
                 stacking_values = None
+                dicom_records = build_dicom_file_records(
+                    dicom_files=dicom_files,
+                    directory_path=self.directory_path,
+                    output_shapes=[array.shape for array in arrays],
+                    output_affines=nifti_affines,
+                    output_metadata=sidecar_metadata,
+                    final_shape=data.shape,
+                    stacking_label=stacking_label,
+                    stacking_values=stacking_values,
+                )
             else:
                 shapes = [tuple(array.shape) for array in arrays]
                 if len(set(shapes)) != 1:
@@ -602,7 +593,26 @@ class DicomDirectoryLoader:
                         f"cannot stack them automatically. Outputs: {paths}"
                     )
 
-                stacking_label, stacking_key, stacking_values = _describe_stacking_axis(sidecar_metadata)
+                data = np.stack(arrays, axis=-1)
+                dicom_records = build_dicom_file_records(
+                    dicom_files=dicom_files,
+                    directory_path=self.directory_path,
+                    output_shapes=[array.shape for array in arrays],
+                    output_affines=nifti_affines,
+                    output_metadata=sidecar_metadata,
+                    final_shape=data.shape,
+                    stacking_label=None,
+                    stacking_values=None,
+                )
+                stacking_label, stacking_key, stacking_values = describe_dicom_volume_stack(
+                    sidecar_metadata,
+                    dicom_records,
+                )
+                set_dicom_record_group_labels(
+                    dicom_records,
+                    stacking_label,
+                    stacking_values,
+                )
                 print(f"Dataset stacked automatically along new dimension: {stacking_label}")
                 if stacking_key is not None and stacking_values is not None:
                     print(f"  {stacking_key}: {stacking_values}")
@@ -610,7 +620,6 @@ class DicomDirectoryLoader:
                     series_descriptions = [metadata.get('SeriesDescription') for metadata in sidecar_metadata]
                     if any(description is not None for description in series_descriptions):
                         print(f"  SeriesDescription: {series_descriptions}")
-                data = np.stack(arrays, axis=-1)
                 base_dim_labels = list(nifti_dim_labels[0]) if nifti_dim_labels else _nifti_dim_labels(arrays[0].ndim)
                 base_dim_labels = _reverse_spatial_metadata(base_dim_labels, arrays[0].ndim)
                 dim_labels = _append_dim_label(base_dim_labels, stacking_label)
@@ -619,17 +628,6 @@ class DicomDirectoryLoader:
                     arrays[0].ndim,
                 )
                 voxel_spacing = _append_voxel_spacing(base_voxel_spacing, None)
-
-            dicom_records = build_dicom_file_records(
-                dicom_files=dicom_files,
-                directory_path=self.directory_path,
-                output_shapes=[array.shape for array in arrays],
-                output_affines=nifti_affines,
-                output_metadata=sidecar_metadata,
-                final_shape=data.shape,
-                stacking_label=stacking_label,
-                stacking_values=stacking_values,
-            )
 
             self.metadata.update({
                 'shape': tuple(data.shape),
