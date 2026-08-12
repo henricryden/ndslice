@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [Unreleased]
+## [0.10.0]
 
 ### Added
 - Native light/dark appearance support with persistent System, Light, and Dark settings.
@@ -12,6 +12,9 @@
 - PyQt6 6.8 or newer is now required (PyQt5 support removed)
 - ndslice now uses the native platform widget style instead of forcing Fusion.
 - Adopted SPEC 0 with Python 3.12, NumPy 2.2, and SciPy 1.15 minimums.
+
+### Fixed
+- DICOM conversion stack labels and follow-slice navigation now use source headers when sidecar metadata is incomplete.
 
 
 
