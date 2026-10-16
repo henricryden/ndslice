@@ -4,6 +4,7 @@ import pyqtgraph as pg
 import os
 import math
 import platform
+import colorsys
 from dataclasses import replace
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
@@ -62,7 +63,7 @@ def _package_version():
     except PackageNotFoundError:
         return "0+unknown"
 MASK_LABEL_MIN = 0
-MASK_LABEL_MAX = 32
+MASK_LABEL_MAX = np.iinfo(np.uint8).max
 MASK_SOLID_COLOR_MODES = ("R", "G", "B", "C", "M", "Y")
 MASK_COLOR_MODES = MASK_SOLID_COLOR_MODES + ("Rainbow",)
 MASK_COLOR_RGB = {
@@ -355,8 +356,16 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _normalize_mask(mask, data_shape):
+        normalized_mask, mask_labels, _ = NDSliceWindow._normalize_mask_with_labels(
+            mask, data_shape
+        )
+        return normalized_mask, mask_labels
+
+    @staticmethod
+    def _normalize_mask_with_labels(mask, data_shape):
         if mask is None:
-            return None, np.array([], dtype=np.uint8)
+            empty_labels = np.array([], dtype=np.uint8)
+            return None, empty_labels, empty_labels
 
         if not isinstance(mask, np.ndarray):
             raise TypeError("mask must be a numpy array")
@@ -371,9 +380,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         mask_shape = NDSliceWindow._broadcast_mask_shape(mask.shape, data_shape)
 
-        normalized_mask = NDSliceWindow._mask_as_uint8(mask)
+        normalized_mask, mask_label_values = NDSliceWindow._compact_mask_labels(mask)
         mask_labels = NDSliceWindow._mask_labels_from_normalized(normalized_mask)
-        return normalized_mask.reshape(mask_shape), mask_labels
+        return normalized_mask.reshape(mask_shape), mask_labels, mask_label_values
 
     @staticmethod
     def _broadcast_mask_shape(mask_shape, data_shape):
@@ -418,30 +427,50 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _mask_as_uint8(mask):
-        is_numeric = np.issubdtype(mask.dtype, np.number) or np.issubdtype(mask.dtype, np.bool_)
-        if not is_numeric or np.iscomplexobj(mask):
-            raise TypeError(f"mask must contain finite integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            normalized_mask = mask.astype(np.uint8, copy=False)
-
-        if not np.all(mask == normalized_mask):
-            NDSliceWindow._raise_mask_value_error(mask)
+        normalized_mask, _ = NDSliceWindow._compact_mask_labels(mask)
         return normalized_mask
 
     @staticmethod
-    def _raise_mask_value_error(mask):
-        if not np.all(np.isfinite(mask)):
-            raise ValueError(f"mask must contain finite integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
-        if not np.all(np.equal(mask, np.round(mask))):
-            raise ValueError(f"mask must contain integer labels from {MASK_LABEL_MIN} to {MASK_LABEL_MAX}")
-        min_label = int(np.min(mask)) if mask.size else MASK_LABEL_MIN
-        max_label = int(np.max(mask)) if mask.size else MASK_LABEL_MIN
-        raise ValueError(
-            f"mask labels must be in the range {MASK_LABEL_MIN}..{MASK_LABEL_MAX}; "
-            f"got {min_label}..{max_label}"
-        )
+    def _compact_mask_labels(mask):
+        is_numeric = np.issubdtype(mask.dtype, np.number) or np.issubdtype(mask.dtype, np.bool_)
+        if not is_numeric or np.iscomplexobj(mask):
+            raise TypeError("mask must contain finite non-negative integer labels")
+
+        if np.issubdtype(mask.dtype, np.floating):
+            if not np.all(np.isfinite(mask)):
+                raise ValueError("mask must contain finite non-negative integer labels")
+            if not np.all(np.equal(mask, np.floor(mask))):
+                raise ValueError("mask must contain integer labels")
+        min_label = np.min(mask) if mask.size else MASK_LABEL_MIN
+        if min_label < MASK_LABEL_MIN:
+            raise ValueError(
+                f"mask labels must be non-negative; got minimum label {int(min_label)}"
+            )
+
+        if mask.size == 0:
+            empty = np.array([], dtype=np.uint8).reshape(mask.shape)
+            return empty, np.array([], dtype=mask.dtype)
+
+        source_labels, inverse = np.unique(mask, return_inverse=True)
+        has_background = source_labels[0] == MASK_LABEL_MIN
+        positive_label_count = len(source_labels) - int(has_background)
+        if positive_label_count > MASK_LABEL_MAX:
+            raise ValueError(
+                f"mask supports at most {MASK_LABEL_MAX} non-zero labels; "
+                f"got {positive_label_count}"
+            )
+
+        first_compact_label = 0 if has_background else 1
+        normalized_mask = (
+            inverse.astype(np.uint8, copy=False) + first_compact_label
+        ).reshape(mask.shape)
+        if has_background:
+            mask_label_values = source_labels
+        else:
+            mask_label_values = np.empty(len(source_labels) + 1, dtype=source_labels.dtype)
+            mask_label_values[0] = MASK_LABEL_MIN
+            mask_label_values[1:] = source_labels
+        return normalized_mask, mask_label_values
 
     @staticmethod
     def _mask_labels_from_normalized(normalized_mask):
@@ -508,7 +537,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             dim_labels = cleaned_metadata.get('dim_labels')
         if voxel_spacing is None:
             voxel_spacing = cleaned_metadata.get('voxel_spacing')
-        self.mask_data, self.mask_labels = self._normalize_mask(mask, data.shape)
+        (
+            self.mask_data,
+            self.mask_labels,
+            self.mask_label_values,
+        ) = self._normalize_mask_with_labels(mask, data.shape)
         self.mask_positive_labels = self.mask_labels[self.mask_labels > 0]
         self.has_mask = self.mask_data is not None
         self.mask_broadcast = (
@@ -1286,6 +1319,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             mask_data=self.mask_data if self.has_mask else None,
             mask_positive_labels=self.mask_positive_labels,
             label_colors=label_colors,
+            mask_label_values=self.mask_label_values,
         )
 
     def _metadata_dialog_text(self):
@@ -2054,8 +2088,19 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         label = int(label)
         if label <= 0 or label > MASK_LABEL_MAX:
             return (0, 0, 0)
-        palette = MASK_SIMPLE_RAINBOW_RGB if self._mask_uses_simple_rainbow() else MASK_GLASBEY_RGB
-        return tuple(int(value) for value in palette[label - 1])
+        if self._mask_uses_simple_rainbow():
+            color = MASK_SIMPLE_RAINBOW_RGB[label - 1]
+        elif label <= len(MASK_GLASBEY_RGB):
+            color = MASK_GLASBEY_RGB[label - 1]
+        else:
+            generated_index = label - len(MASK_GLASBEY_RGB) - 1
+            hue = (generated_index * 0.618033988749895) % 1.0
+            saturation = 0.65 + 0.2 * ((generated_index // 3) % 2)
+            value = 0.8 + 0.15 * ((generated_index // 6) % 2)
+            color = np.rint(
+                np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
+            )
+        return tuple(int(value) for value in color)
 
     def _mask_label_lookup_table(self):
         lut = np.zeros((MASK_LABEL_MAX + 1, 4), dtype=np.ubyte)
@@ -2357,7 +2402,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     and x_i < mask_img.shape[0]
                     and y_i < mask_img.shape[1]
                 ):
-                    mask_value = mask_img[x_i, y_i]
+                    compact_mask_value = mask_img[x_i, y_i]
+                    compact_label = int(compact_mask_value)
+                    if 0 <= compact_label < len(self.mask_label_values):
+                        mask_value = self.mask_label_values[compact_label]
+                    else:
+                        mask_value = compact_mask_value
                 coordinate = [
                     spinbox.value()
                     for spinbox in self.widgets['spins']['slice_indices']
@@ -3464,6 +3514,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                                 voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
                                 mask=self.mask_data,
                                 metadata=metadata if metadata is not None else self.metadata)
+            win.mask_label_values = self.mask_label_values
             win.setWindowTitle(self.windowTitle())
             win.show()
             self.close()
@@ -3490,6 +3541,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 self.mask_data = None
                 self.mask_labels = np.array([], dtype=np.uint8)
                 self.mask_positive_labels = self.mask_labels
+                self.mask_label_values = self.mask_labels
                 self.mask_broadcast = None
                 self._mask_visible = False
                 if hasattr(self, 'mask_group'):

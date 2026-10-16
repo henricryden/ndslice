@@ -34,6 +34,7 @@ class ImageView2D(QtWidgets.QWidget):
         self.mask = None
         self.maskDisp = None
         self.maskLookupTable = None
+        self.maskLevels = (0, np.iinfo(np.uint8).max)
         self.levelMin = None
         self.levelMax = None
         self.displayMode = 'square_pixels'  # Default to square pixels
@@ -183,13 +184,12 @@ class ImageView2D(QtWidgets.QWidget):
         if img.ndim != 2:
             raise ValueError("Mask image must be 2D")
 
+        if levels is None:
+            levels = self.maskLevels
+        self.maskLevels = tuple(levels)
         self.mask = img
         self.maskDisp = None
         self.updateMaskImage()
-
-        if levels is None:
-            levels = (0, 32)
-        self.maskImageItem.setLevels(levels)
 
         self.maskImageItem.setVisible(True)
 
@@ -202,7 +202,7 @@ class ImageView2D(QtWidgets.QWidget):
             self.maskDisp,
             autoLevels=False,
             lut=self.maskLookupTable,
-            levels=(0, 32),
+            levels=self.maskLevels,
         )
             
     def autoRange(self):
@@ -269,7 +269,8 @@ class ImageView2D(QtWidgets.QWidget):
     def setMaskLookupTable(self, lut):
         self.maskLookupTable = lut
         self.maskImageItem.setLookupTable(lut)
-        self.maskImageItem.setLevels((0, 32))
+        self.maskLevels = (0, len(lut) - 1)
+        self.maskImageItem.setLevels(self.maskLevels)
         if self.mask is not None:
             self.updateMaskImage()
 

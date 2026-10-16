@@ -13,9 +13,6 @@
 - ndslice now uses the native platform widget style instead of forcing Fusion.
 - Adopted SPEC 0 with Python 3.12, NumPy 2.2, and SciPy 1.15 minimums.
 
-### Fixed
-- DICOM conversion stack labels and follow-slice navigation now use source headers when sidecar metadata is incomplete.
-
 
 
 ## [0.9.0]

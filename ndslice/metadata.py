@@ -5,7 +5,7 @@ import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
-MASK_LABEL_MAX = 32
+MASK_LABEL_MAX = np.iinfo(np.uint8).max
 
 _SPATIAL_UNIT_LABELS = {
     'm': 'm',
@@ -182,7 +182,7 @@ def _format_physical_measure(value, power, spatial_unit, include_ml=True):
 def _mask_metadata_model(
         data_shape, mask_data, mask_positive_labels, dim_labels,
         voxel_spacing, has_voxel_spacing_metadata, spatial_unit,
-        label_colors):
+        label_colors, mask_label_values):
     physical, unavailable_reason = _mask_physical_statistics(
         data_shape,
         mask_data,
@@ -246,10 +246,15 @@ def _mask_metadata_model(
     labels = []
     for value in mask_positive_labels:
         label = int(value)
+        source_label = (
+            mask_label_values[label]
+            if label < len(mask_label_values)
+            else label
+        )
         label_count = int(counts[label])
         share = 100 * label_count / labeled_count if labeled_count else 0.0
         label_row = {
-            'label': str(label),
+            'label': str(int(source_label)),
             'count': f"{label_count:,}",
             'share': _format_percentage(share, compact=True),
             'color': label_colors[label],
@@ -293,7 +298,7 @@ def _scaling_rows(metadata):
 def build_metadata_model(
         data, metadata, dim_labels, voxel_spacing,
         has_voxel_spacing_metadata=False, mask_data=None,
-        mask_positive_labels=(), label_colors=None):
+        mask_positive_labels=(), label_colors=None, mask_label_values=None):
     metadata = clean_metadata(metadata)
     spatial_unit = metadata.get('spatial_unit')
     model = {
@@ -366,6 +371,7 @@ def build_metadata_model(
             has_voxel_spacing_metadata,
             spatial_unit,
             label_colors or {},
+            mask_label_values if mask_label_values is not None else (),
         )
 
     model['additional_metadata'] = {

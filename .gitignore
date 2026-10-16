@@ -47,3 +47,4 @@ bin/
 # Distribution
 dist/
 build/
+test/

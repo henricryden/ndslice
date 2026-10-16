@@ -79,7 +79,8 @@ Default orientation is image-style (origin lower-left).
 Flip the primary axis for matrix-style (origin upper-left).
 
 **Mask overlay**
-Pass `mask=` to overlay a label volume on the main image. Mask values must be integer labels from `0` to `32`; label `0` is transparent, opacity is adjustable, and the small color swatch cycles between solid RGBCMY colors and a Glasbey rainbow palette for the labels present in the mask.
+Pass `mask=` to overlay a label volume on the main image. A mask may contain up to 255 distinct non-zero, non-negative integer labels.
+Sparse values are compacted internally for display while their original label values remain visible in pixel and mask metadata. Label `0` is transparent, opacity is adjustable, and the small color swatch cycles between solid RGBCMY colors and a categorical rainbow palette for the labels present in the mask.
 
 **Non-blocking windows**
 
