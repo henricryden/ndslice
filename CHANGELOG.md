@@ -4,6 +4,7 @@
 ## [0.10.0]
 
 ### Added
+- Automatic DICOM header window/level display.
 - Native light/dark appearance support with persistent System, Light, and Dark settings.
 - Array metadata dialog and DICOM tag browser with fuzzy search.
 - Configurable DICOM/NIfTI intensity scaling (scaled/raw pixel values)

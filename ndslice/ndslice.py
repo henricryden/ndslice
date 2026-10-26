@@ -14,6 +14,7 @@ from .range_slider import RangeSlider
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
 from .metadata import MetadataDialog, build_metadata_model, clean_metadata
 from .dicom_dialog import DicomTagsDialog
+from .dicom_metadata import dicom_window_levels
 from .config import (
     ANGLE_COLORMAP_SAME,
     COLOR_SCHEME_DARK,
@@ -625,6 +626,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     #'log': QtWidgets.QRadioButton('log', checkable=True),
                     'linear': QtWidgets.QRadioButton('linear', checkable=True, checked=True),
                     'symlog': QtWidgets.QRadioButton('symlog', checkable=True),
+                    'header': QtWidgets.QRadioButton('Header', checkable=True),
                     #'asinh': QtWidgets.QRadioButton('asinh', checkable=True)
                     
                 },
@@ -663,6 +665,12 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         #self.scale_button_group.addButton(self.widgets['buttons']['processing']['log'])
         self.scale_button_group.addButton(self.widgets['buttons']['processing']['linear'])
         self.scale_button_group.addButton(self.widgets['buttons']['processing']['symlog'])
+        self.scale_button_group.addButton(self.widgets['buttons']['processing']['header'])
+        self.widgets['buttons']['processing']['header'].setVisible(False)
+        self.widgets['buttons']['processing']['header'].setToolTip(
+            'Apply the first DICOM header window/level preset for the current slice'
+        )
+        self._header_available = False
         #self.scale_button_group.addButton(self.widgets['buttons']['processing']['asinh'])
         
         
@@ -1337,6 +1345,62 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _record_dicom_inspection(self, path):
         self._dicom_last_path = path
+
+    def _header_window_levels(self):
+        if (self.data.ndim < 2 or np.iscomplexobj(self.data)
+                or self._current_channel_name() != 'real'
+                or any(domain != Domain.NATIVE for domain in self.domain)):
+            return None
+        records = self._dicom_records()
+        if not records:
+            return None
+        exact = self._exact_current_dicom_record_index(records)
+        if exact is not None:
+            candidates = [records[exact]]
+        else:
+            # Reformatted views may span several files. Only use a window
+            # shared by every contributing file in the active output volume.
+            candidates = records
+            outputs = self.metadata.get('converted_output_names', [])
+            if len(outputs) > 1:
+                axis = self.data.ndim - 1
+                if axis not in self.selected_indices:
+                    index = self.widgets['spins']['slice_indices'][axis].value()
+                    candidates = [r for r in records if r.get('output_index') == index]
+        levels = []
+        for record in candidates:
+            scaling = self._pixel_value_scaling
+            transform = (1.0, 0.0)
+            if scaling is not None:
+                if 'global' in scaling:
+                    transform = scaling['global']
+                else:
+                    axis = scaling['axis']
+                    if axis in self.selected_indices:
+                        return None
+                    index = self.widgets['spins']['slice_indices'][axis].value()
+                    if not 0 <= index < len(scaling['transforms']):
+                        return None
+                    transform = scaling['transforms'][index]
+            window = dicom_window_levels(record, transform)
+            if window is None:
+                return None
+            levels.append(window)
+        if levels and all(window == levels[0] for window in levels):
+            return levels[0]
+        return None
+
+    def _sync_header_control(self, auto_select=False):
+        levels = self._header_window_levels()
+        button = self.widgets['buttons']['processing']['header']
+        available = levels is not None
+        button.setVisible(available)
+        if available and (auto_select or not self._header_available):
+            button.setChecked(True)
+        elif not available and button.isChecked():
+            self.widgets['buttons']['processing']['linear'].setChecked(True)
+        self._header_available = available
+        return levels
 
     def _create_dicom_button(self):
         button = QtWidgets.QToolButton(self)
@@ -2425,6 +2489,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     
     def update_image_view(self):
+        header_levels = self._sync_header_control()
         if self.data.ndim == 1: # No image view for 1D data
             return
             
@@ -2455,6 +2520,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if self.widgets['buttons']['processing']['symlog'].isChecked():
             processing_func = symlog
             self.scale = 'symlog'
+        elif self.widgets['buttons']['processing']['header'].isChecked():
+            self.scale = 'header'
         else:
             self.scale = None
         
@@ -2470,6 +2537,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             prev_levels = self.img_view.imageItem.levels
         elif def_levels is not None:
             prev_levels = def_levels
+
+        if self.scale == 'header' and header_levels is not None:
+            prev_levels = header_levels
+            al = False
 
         
         try:
@@ -3610,6 +3681,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._apply_initial_origin()
         self.update_dimension_controls()
         self._force_autolevel = True
+        self._sync_header_control(auto_select=True)
         self.update()
 
 

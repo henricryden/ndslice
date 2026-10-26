@@ -40,6 +40,11 @@ DICOM_CURATED_TAGS = (
 )
 
 DICOM_NAVIGATION_TAGS = (
+    'WindowCenter',
+    'WindowWidth',
+    'VOILUTFunction',
+    'RescaleSlope',
+    'RescaleIntercept',
     'Rows',
     'Columns',
     'NumberOfFrames',
@@ -251,6 +256,11 @@ def dicom_header_record(path, directory_path=None, dataset=None):
         return record
 
     value_fields = {
+        'window_center': 'WindowCenter',
+        'window_width': 'WindowWidth',
+        'voi_lut_function': 'VOILUTFunction',
+        'rescale_slope': 'RescaleSlope',
+        'rescale_intercept': 'RescaleIntercept',
         'rows': 'Rows',
         'columns': 'Columns',
         'number_of_frames': 'NumberOfFrames',
@@ -272,6 +282,51 @@ def dicom_header_record(path, directory_path=None, dataset=None):
     for field, keyword in value_fields.items():
         record[field] = _dicom_plain_value(getattr(dataset, keyword, None))
     return record
+
+
+def dicom_window_levels(record, applied_scaling=(1.0, 0.0)):
+    """Return the first supported VOI window in the loaded array's units.
+
+    DICOM windows use modality-scaled units. Convert through stored pixel
+    values so this also works with raw loading and dcm2niix scaling.
+    """
+    def first_number(value):
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        return float(value)
+
+    try:
+        center = first_number(record.get('window_center'))
+        width = first_number(record.get('window_width'))
+        source_slope = record.get('rescale_slope')
+        source_intercept = record.get('rescale_intercept')
+        source_slope = first_number(1.0 if source_slope is None else source_slope)
+        source_intercept = first_number(0.0 if source_intercept is None else source_intercept)
+        slope, intercept = map(float, applied_scaling)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not all(np.isfinite(v) for v in (
+        center, width, source_slope, source_intercept, slope, intercept,
+    )) or source_slope == 0 or slope == 0:
+        return None
+    function = str(record.get('voi_lut_function') or 'LINEAR').strip().upper()
+    if function == 'LINEAR' and width >= 1:
+        low = center - 0.5 - (width - 1) / 2
+        high = center - 0.5 + (width - 1) / 2
+    elif function == 'LINEAR_EXACT' and width > 0:
+        low, high = center - width / 2, center + width / 2
+    else:
+        return None
+    levels = sorted((
+        (low - source_intercept) / source_slope * slope + intercept,
+        (high - source_intercept) / source_slope * slope + intercept,
+    ))
+    if not all(np.isfinite(levels)):
+        return None
+    if levels[0] == levels[1]:
+        # Width 1 is a threshold: values at the boundary are still black.
+        levels[1] = np.nextafter(levels[0], np.inf)
+    return tuple(levels)
 
 
 def single_dicom_file_record(path, dataset, data):
