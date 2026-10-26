@@ -769,7 +769,9 @@ def load_path(filepath, apply_scaling=True):
         data = loader.load()
         return LoadedPath(data=data, metadata=loader.metadata)
 
-    suffix = ''.join(filepath.suffixes).lower()
+    suffix = filepath.suffix.lower()
+    if filepath.name.lower().endswith('.nii.gz'):
+        suffix = '.nii.gz'
 
     if suffix == '.npy':
         data = np.load(filepath)
