@@ -329,6 +329,36 @@ def dicom_window_levels(record, applied_scaling=(1.0, 0.0)):
     return tuple(levels)
 
 
+def dicom_display_orientation(record):
+    """Return display dimensions and flips for a radiological native plane.
+
+    Directions describe increasing ndarray indices in RAS coordinates.
+    Sagittal views have anterior left and superior up; axial and coronal
+    views have patient right on screen left.
+    """
+    try:
+        dims = record['in_plane_dims']
+        directions = np.asarray(record['in_plane_directions'], dtype=float)
+        if len(dims) != 2 or directions.shape != (2, 3):
+            return None
+        norms = np.linalg.norm(directions, axis=1)
+        if not np.all(np.isfinite(directions)) or np.any(norms == 0):
+            return None
+        axes = np.argmax(np.abs(directions), axis=1).tolist()
+        if len(set(axes)) != 2:
+            return None
+        # Desired screen-up and screen-right directions, in RAS.
+        up_axis = 1 if set(axes) == {0, 1} else 2
+        right_axis = next(axis for axis in axes if axis != up_axis)
+        y = axes.index(up_axis)
+        x = axes.index(right_axis)
+        return ([dims[y], dims[x]],
+                [bool(directions[y, up_axis] < 0),
+                 bool(directions[x, right_axis] > 0)])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def single_dicom_file_record(path, dataset, data):
     record = dicom_header_record(path, dataset=dataset)
     if data.ndim == 2:
@@ -340,6 +370,15 @@ def single_dicom_file_record(path, dataset, data):
             'output_index': 0,
             'group_label': '',
         })
+        orientation = record.get('image_orientation_patient')
+        if isinstance(orientation, list) and len(orientation) == 6:
+            try:
+                record['in_plane_directions'] = [
+                    _lps_to_ras(orientation[3:6]).tolist(),
+                    _lps_to_ras(orientation[:3]).tolist(),
+                ]
+            except (TypeError, ValueError):
+                pass
     else:
         record['navigation_reason'] = (
             'Multi-frame single-file DICOM navigation is not available'
@@ -484,6 +523,7 @@ def _map_dicom_plane(record, output_shape, affine):
 
     return {
         'in_plane_dims': in_plane_dims,
+        'in_plane_directions': affine[:3, in_plane_dims].T.tolist(),
         'fixed_indices': fixed_indices,
     }, ''
 
@@ -610,6 +650,7 @@ def build_dicom_file_records(
             'navigable': True,
             'navigation_reason': '',
             'in_plane_dims': mapping['in_plane_dims'],
+            'in_plane_directions': mapping['in_plane_directions'],
             'fixed_indices': fixed_indices,
         })
 

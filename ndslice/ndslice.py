@@ -14,7 +14,7 @@ from .range_slider import RangeSlider
 from .video_export import VideoExportWorker, VideoExportDialog, VideoExportSettingsDialog
 from .metadata import MetadataDialog, build_metadata_model, clean_metadata
 from .dicom_dialog import DicomTagsDialog
-from .dicom_metadata import dicom_window_levels
+from .dicom_metadata import dicom_display_orientation, dicom_window_levels
 from .config import (
     ANGLE_COLORMAP_SAME,
     COLOR_SCHEME_DARK,
@@ -526,6 +526,27 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         return selected
 
+    def _initial_dicom_plane(self):
+        """Use the source image plane when mapped DICOM files agree on it."""
+        planes = set()
+        for record in self._dicom_records():
+            if not record.get('navigable'):
+                continue
+            try:
+                orientation = dicom_display_orientation(record)
+                dims = orientation[0] if orientation else record.get('in_plane_dims', [])
+                plane = tuple(int(dim) for dim in dims)
+            except (TypeError, ValueError):
+                return None
+            if (len(plane) != 2 or len(set(plane)) != 2
+                    or any(dim < 0 or dim >= self.data.ndim
+                           or self.data.shape[dim] == 1 for dim in plane)):
+                return None
+            planes.add(plane)
+        if len(planes) == 1:
+            return list(next(iter(planes)))
+        return None
+
     def __init__(self, data, complex_dim=None, filepath=None, dataset_path=None,
                  selector_class_name=None, config_path=None, dim_labels=None,
                  voxel_spacing=None, mask=None, metadata=None):
@@ -599,7 +620,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         # Store complex_dim for later use (after widgets are created)
         self._initial_complex_dim = complex_dim
 
-        self.selected_indices = self._initial_selected_indices(
+        self.selected_indices = self._initial_dicom_plane() or self._initial_selected_indices(
             data.shape,
             self._viewer_config.default_slice,
         )
@@ -1899,6 +1920,19 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
     def _apply_initial_origin(self):
         self._set_origin(self._viewer_config.initial_origin)
+        if self.is_line_plot_mode():
+            return
+        orientations = [dicom_display_orientation(record)
+                        for record in self._dicom_records() if record.get('navigable')]
+        if not orientations or any(view != orientations[0] for view in orientations):
+            return
+        orientation = orientations[0]
+        if orientation is None or self.selected_indices != orientation[0]:
+            return
+        for dim, flipped in zip(*orientation):
+            self.axis_flipped[dim] = flipped
+        self.update_flip_icons()
+        self.apply_axis_flips()
 
     def _set_origin(self, origin):
         if origin not in SUPPORTED_ORIGINS:
