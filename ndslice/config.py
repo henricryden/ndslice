@@ -41,7 +41,7 @@ SUPPORTED_DISPLAY_MODES = (
 DISPLAY_MODE_ALIASES = {
     "fit": "auto",
 }
-DEFAULT_MASK_OPACITY = 0.8
+DEFAULT_OVERLAY_OPACITY = 0.8
 DEFAULT_APPLY_SCALING = True
 COLOR_SCHEME_SYSTEM = "system"
 COLOR_SCHEME_LIGHT = "light"
@@ -62,7 +62,7 @@ class ViewerConfig:
     default_colormap: str = DEFAULT_COLORMAP
     angle_colormap: str = ANGLE_COLORMAP_SAME
     default_display_mode: str = DEFAULT_DISPLAY_MODE
-    default_mask_opacity: float = DEFAULT_MASK_OPACITY
+    default_overlay_opacity: float = DEFAULT_OVERLAY_OPACITY
     apply_scaling: bool = DEFAULT_APPLY_SCALING
     color_scheme: str = COLOR_SCHEME_SYSTEM
 
@@ -127,8 +127,8 @@ def load_config(path=None, colormap_names=None):
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 
-    default_mask_opacity = _clean_mask_opacity(
-        display.get("default_mask_opacity", DEFAULT_MASK_OPACITY)
+    default_overlay_opacity = _clean_overlay_opacity(
+        display.get("default_overlay_opacity", DEFAULT_OVERLAY_OPACITY)
     )
     color_scheme = display.get("color_scheme", COLOR_SCHEME_SYSTEM)
     if color_scheme not in SUPPORTED_COLOR_SCHEMES:
@@ -145,7 +145,7 @@ def load_config(path=None, colormap_names=None):
         default_colormap=default_colormap,
         angle_colormap=angle_colormap,
         default_display_mode=default_display_mode,
-        default_mask_opacity=default_mask_opacity,
+        default_overlay_opacity=default_overlay_opacity,
         apply_scaling=apply_scaling,
         color_scheme=color_scheme,
     )
@@ -191,7 +191,7 @@ def save_config(config, path=None, colormap_names=None):
     if default_display_mode not in SUPPORTED_DISPLAY_MODES:
         default_display_mode = DEFAULT_DISPLAY_MODE
 
-    default_mask_opacity = _clean_mask_opacity(config.default_mask_opacity)
+    default_overlay_opacity = _clean_overlay_opacity(config.default_overlay_opacity)
     color_scheme = config.color_scheme
     if color_scheme not in SUPPORTED_COLOR_SCHEMES:
         color_scheme = COLOR_SCHEME_SYSTEM
@@ -212,7 +212,7 @@ def save_config(config, path=None, colormap_names=None):
         f'default_colormap = "{default_colormap}"\n'
         f'angle_colormap = "{angle_colormap}"\n'
         f'default_display_mode = "{default_display_mode}"\n'
-        f"default_mask_opacity = {default_mask_opacity:.6g}\n"
+        f"default_overlay_opacity = {default_overlay_opacity:.6g}\n"
         f'color_scheme = "{color_scheme}"\n'
         "\n"
         "[loading]\n"
@@ -227,11 +227,11 @@ def update_config(path=None, colormap_names=None, **changes):
     return config
 
 
-def _clean_mask_opacity(value):
+def _clean_overlay_opacity(value):
     try:
         opacity = float(value)
     except (TypeError, ValueError):
-        return DEFAULT_MASK_OPACITY
+        return DEFAULT_OVERLAY_OPACITY
     if not 0.0 <= opacity <= 1.0:
-        return DEFAULT_MASK_OPACITY
+        return DEFAULT_OVERLAY_OPACITY
     return opacity

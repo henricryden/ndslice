@@ -19,7 +19,7 @@
 ## [0.9.0]
 
 ### Added
-- **Mask overlays** — Added mask overlays from Python (`mask=`) and CLI (`--mask`).
+- Added label overlays.
 - **Video export ranges** — Added start/end slice selection.
 
 ### Changed

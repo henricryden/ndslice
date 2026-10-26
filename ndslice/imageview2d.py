@@ -31,10 +31,10 @@ class ImageView2D(QtWidgets.QWidget):
         
         self.image = None
         self.imageDisp = None
-        self.mask = None
-        self.maskDisp = None
-        self.maskLookupTable = None
-        self.maskLevels = (0, np.iinfo(np.uint8).max)
+        self.overlay = None
+        self.overlayDisp = None
+        self.overlayLookupTable = None
+        self.overlayLevels = (0, np.iinfo(np.uint8).max)
         self.levelMin = None
         self.levelMax = None
         self.displayMode = 'square_pixels'  # Default to square pixels
@@ -59,11 +59,11 @@ class ImageView2D(QtWidgets.QWidget):
             self.imageItem = imageItem
         self.view.addItem(self.imageItem)
 
-        self.maskImageItem = ImageItem()
-        self.maskImageItem.setZValue(10)
-        self.maskImageItem.setOpacity(0.8)
-        self.maskImageItem.setVisible(False)
-        self.view.addItem(self.maskImageItem, ignoreBounds=True)
+        self.overlayImageItem = ImageItem()
+        self.overlayImageItem.setZValue(10)
+        self.overlayImageItem.setOpacity(0.8)
+        self.overlayImageItem.setVisible(False)
+        self.view.addItem(self.overlayImageItem, ignoreBounds=True)
         
         # Setup histogram
         self.histogram.setImageItem(self.imageItem)
@@ -146,7 +146,7 @@ class ImageView2D(QtWidgets.QWidget):
         
         if transform is not None:
             self.imageItem.setTransform(transform)
-            self.maskImageItem.setTransform(transform)
+            self.overlayImageItem.setTransform(transform)
             
         # Update aspect ratio based on display mode
         self._updateAspectRatio()
@@ -173,36 +173,36 @@ class ImageView2D(QtWidgets.QWidget):
         if autoHistogramRange:
             self.histogram.setHistogramRange(self.levelMin, self.levelMax)
 
-    def setMaskImage(self, img, levels=None):
+    def setOverlayImage(self, img, levels=None):
         if img is None:
-            self.clearMask()
+            self.clearOverlay()
             return
 
         if not isinstance(img, np.ndarray):
-            raise TypeError("Mask image must be a numpy array")
+            raise TypeError("Overlay image must be a numpy array")
 
         if img.ndim != 2:
-            raise ValueError("Mask image must be 2D")
+            raise ValueError("Overlay image must be 2D")
 
         if levels is None:
-            levels = self.maskLevels
-        self.maskLevels = tuple(levels)
-        self.mask = img
-        self.maskDisp = None
-        self.updateMaskImage()
+            levels = self.overlayLevels
+        self.overlayLevels = tuple(levels)
+        self.overlay = img
+        self.overlayDisp = None
+        self.updateOverlayImage()
 
-        self.maskImageItem.setVisible(True)
+        self.overlayImageItem.setVisible(True)
 
-    def updateMaskImage(self):
-        if self.mask is None:
+    def updateOverlayImage(self):
+        if self.overlay is None:
             return
 
-        self.maskDisp = self.mask
-        self.maskImageItem.setImage(
-            self.maskDisp,
+        self.overlayDisp = self.overlay
+        self.overlayImageItem.setImage(
+            self.overlayDisp,
             autoLevels=False,
-            lut=self.maskLookupTable,
-            levels=self.maskLevels,
+            lut=self.overlayLookupTable,
+            levels=self.overlayLevels,
         )
             
     def autoRange(self):
@@ -266,26 +266,26 @@ class ImageView2D(QtWidgets.QWidget):
         """Set the color map for the histogram"""
         self.histogram.gradient.setColorMap(colormap)
 
-    def setMaskLookupTable(self, lut):
-        self.maskLookupTable = lut
-        self.maskImageItem.setLookupTable(lut)
-        self.maskLevels = (0, len(lut) - 1)
-        self.maskImageItem.setLevels(self.maskLevels)
-        if self.mask is not None:
-            self.updateMaskImage()
+    def setOverlayLookupTable(self, lut):
+        self.overlayLookupTable = lut
+        self.overlayImageItem.setLookupTable(lut)
+        self.overlayLevels = (0, len(lut) - 1)
+        self.overlayImageItem.setLevels(self.overlayLevels)
+        if self.overlay is not None:
+            self.updateOverlayImage()
 
-    def setMaskOpacity(self, opacity):
-        self.maskImageItem.setOpacity(float(opacity))
+    def setOverlayOpacity(self, opacity):
+        self.overlayImageItem.setOpacity(float(opacity))
 
-    def setMaskVisible(self, visible):
-        has_mask = self.mask is not None
-        self.maskImageItem.setVisible(bool(visible) and has_mask)
+    def setOverlayVisible(self, visible):
+        has_overlay = self.overlay is not None
+        self.overlayImageItem.setVisible(bool(visible) and has_overlay)
 
-    def clearMask(self):
-        self.mask = None
-        self.maskDisp = None
-        self.maskImageItem.clear()
-        self.maskImageItem.setVisible(False)
+    def clearOverlay(self):
+        self.overlay = None
+        self.overlayDisp = None
+        self.overlayImageItem.clear()
+        self.overlayImageItem.setVisible(False)
         
     def setDisplayMode(self, mode, auto_aspect_ratio=None):
         """Set the display mode.

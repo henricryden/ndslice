@@ -22,8 +22,8 @@ class VideoExportWorker(QtCore.QThread):
                  channel_func, processing_func, slice_indices, selected_indices, 
                  singleton, levels=None, transpose=False, pixel_ratio_mode='square_pixels',
                  display_mode='square_pixels', widget_ratio=1.0, axis_flipped=None,
-                 lut=None, window_level_mode='displayed', mask_data=None,
-                 mask_lut=None, mask_enabled=False, mask_opacity=0.5,
+                 lut=None, window_level_mode='displayed', overlay_data=None,
+                 overlay_lut=None, overlay_enabled=False, overlay_opacity=0.5,
                  frame_start=0, frame_stop=None, display_aspect_ratio=None):
         super().__init__()
         self.transpose = transpose
@@ -33,10 +33,10 @@ class VideoExportWorker(QtCore.QThread):
         self.display_aspect_ratio = display_aspect_ratio
         self.axis_flipped = axis_flipped or []
         self.lut = lut
-        self.mask_data = mask_data
-        self.mask_lut = mask_lut
-        self.mask_enabled = bool(mask_enabled)
-        self.mask_opacity = max(0.0, min(float(mask_opacity), 1.0))
+        self.overlay_data = overlay_data
+        self.overlay_lut = overlay_lut
+        self.overlay_enabled = bool(overlay_enabled)
+        self.overlay_opacity = max(0.0, min(float(overlay_opacity), 1.0))
         self.data = data
         self.export_dim = export_dim
         self.output_path = output_path
@@ -123,8 +123,8 @@ class VideoExportWorker(QtCore.QThread):
         frame_rgb = self._colorize_frame(frame_uint8)
         frame_rgb = self._orient_rgb_frame(frame_rgb)
 
-        mask_frame = self._mask_frame(frame_slice, frame_rgb.shape[:2])
-        frame_rgb = self._composite_mask(frame_rgb, mask_frame)
+        overlay_frame = self._overlay_frame(frame_slice, frame_rgb.shape[:2])
+        frame_rgb = self._composite_overlay(frame_rgb, overlay_frame)
         return self._apply_pixel_ratio(frame_rgb)
 
     def _colorize_frame(self, frame_uint8):
@@ -159,40 +159,40 @@ class VideoExportWorker(QtCore.QThread):
             pass
         return frame
 
-    def _mask_frame(self, frame_slice, image_shape):
-        if not self.mask_enabled or self.mask_data is None or self.mask_lut is None:
+    def _overlay_frame(self, frame_slice, image_shape):
+        if not self.overlay_enabled or self.overlay_data is None or self.overlay_lut is None:
             return None
 
-        mask_frame = np.squeeze(self.mask_data[frame_slice])
-        if mask_frame.ndim != 2:
+        overlay_frame = np.squeeze(self.overlay_data[frame_slice])
+        if overlay_frame.ndim != 2:
             shape_before_orientation = tuple(reversed(image_shape)) if self.transpose else image_shape
-            mask_frame = np.broadcast_to(mask_frame, shape_before_orientation)
+            overlay_frame = np.broadcast_to(overlay_frame, shape_before_orientation)
         if self.transpose:
-            mask_frame = np.transpose(mask_frame)
-        return self._apply_axis_flips(mask_frame)
+            overlay_frame = np.transpose(overlay_frame)
+        return self._apply_axis_flips(overlay_frame)
 
-    def _composite_mask(self, frame_rgb, mask_frame):
-        if mask_frame is None:
+    def _composite_overlay(self, frame_rgb, overlay_frame):
+        if overlay_frame is None:
             return frame_rgb
 
-        mask_lut = np.asarray(self.mask_lut)
-        if mask_lut.ndim != 2 or mask_lut.shape[1] < 3:
+        overlay_lut = np.asarray(self.overlay_lut)
+        if overlay_lut.ndim != 2 or overlay_lut.shape[1] < 3:
             return frame_rgb
 
-        mask_indices = np.asarray(mask_frame, dtype=np.intp)
-        valid = (mask_indices >= 0) & (mask_indices < len(mask_lut))
-        clipped = np.clip(mask_indices, 0, len(mask_lut) - 1)
-        mask_rgba = mask_lut[clipped]
-        mask_rgb = np.asarray(mask_rgba[..., :3], dtype=np.float32)
-        if mask_rgba.shape[-1] >= 4:
-            alpha = np.asarray(mask_rgba[..., 3], dtype=np.float32) / 255.0
+        overlay_indices = np.asarray(overlay_frame, dtype=np.intp)
+        valid = (overlay_indices >= 0) & (overlay_indices < len(overlay_lut))
+        clipped = np.clip(overlay_indices, 0, len(overlay_lut) - 1)
+        overlay_rgba = overlay_lut[clipped]
+        overlay_rgb = np.asarray(overlay_rgba[..., :3], dtype=np.float32)
+        if overlay_rgba.shape[-1] >= 4:
+            alpha = np.asarray(overlay_rgba[..., 3], dtype=np.float32) / 255.0
         else:
-            alpha = (mask_indices != 0).astype(np.float32)
-        alpha = alpha * self.mask_opacity * valid.astype(np.float32)
+            alpha = (overlay_indices != 0).astype(np.float32)
+        alpha = alpha * self.overlay_opacity * valid.astype(np.float32)
         alpha = alpha[..., np.newaxis]
 
         frame_float = frame_rgb.astype(np.float32)
-        blended = frame_float * (1.0 - alpha) + mask_rgb * alpha
+        blended = frame_float * (1.0 - alpha) + overlay_rgb * alpha
         return np.clip(np.rint(blended), 0, 255).astype(np.uint8)
     
     def _save_gif(self, frames):
@@ -485,7 +485,7 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
     """Dialog to configure export settings"""
     
     def __init__(self, parent=None, export_dim=None, data_shape=None,
-                 has_mask=False, mask_visible=False, mask_opacity=0.5,
+                 has_overlay=False, overlay_visible=False, overlay_opacity=0.5,
                  preview_callback=None):
         super().__init__(parent)
         self.setWindowTitle("Export Video Settings")
@@ -493,12 +493,12 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         self.export_dim = export_dim
         self.data_shape = data_shape
         self.preview_callback = preview_callback
-        self.has_mask = bool(has_mask)
-        self.mask_visible = bool(mask_visible)
-        self.mask_opacity = max(0.0, min(float(mask_opacity), 1.0))
-        self.mask_checkbox = None
-        self.mask_opacity_slider = None
-        self.mask_opacity_label = None
+        self.has_overlay = bool(has_overlay)
+        self.overlay_visible = bool(overlay_visible)
+        self.overlay_opacity = max(0.0, min(float(overlay_opacity), 1.0))
+        self.overlay_checkbox = None
+        self.overlay_opacity_slider = None
+        self.overlay_opacity_label = None
         self.range_slider = None
         self.start_spinbox = None
         self.end_spinbox = None
@@ -621,25 +621,25 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         range_layout.setColumnStretch(2, 1)
         layout.addLayout(range_layout)
 
-        if self.has_mask:
-            mask_layout = QtWidgets.QHBoxLayout()
-            self.mask_checkbox = QtWidgets.QCheckBox("Mask")
-            self.mask_checkbox.setChecked(self.mask_visible)
-            self.mask_checkbox.toggled.connect(self._on_mask_toggled)
-            mask_layout.addWidget(self.mask_checkbox)
+        if self.has_overlay:
+            overlay_layout = QtWidgets.QHBoxLayout()
+            self.overlay_checkbox = QtWidgets.QCheckBox("Overlay")
+            self.overlay_checkbox.setChecked(self.overlay_visible)
+            self.overlay_checkbox.toggled.connect(self._on_overlay_toggled)
+            overlay_layout.addWidget(self.overlay_checkbox)
 
-            self.mask_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-            self.mask_opacity_slider.setRange(0, 100)
-            self.mask_opacity_slider.setValue(int(round(self.mask_opacity * 100)))
-            self.mask_opacity_slider.setFixedWidth(90)
-            self.mask_opacity_slider.valueChanged.connect(self._on_mask_opacity_changed)
-            mask_layout.addWidget(self.mask_opacity_slider)
+            self.overlay_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+            self.overlay_opacity_slider.setRange(0, 100)
+            self.overlay_opacity_slider.setValue(int(round(self.overlay_opacity * 100)))
+            self.overlay_opacity_slider.setFixedWidth(90)
+            self.overlay_opacity_slider.valueChanged.connect(self._on_overlay_opacity_changed)
+            overlay_layout.addWidget(self.overlay_opacity_slider)
 
-            self.mask_opacity_label = QtWidgets.QLabel(f"{int(round(self.mask_opacity * 100))}%")
-            self.mask_opacity_label.setMinimumWidth(36)
-            mask_layout.addWidget(self.mask_opacity_label)
-            layout.addLayout(mask_layout)
-            self._on_mask_toggled(self.mask_checkbox.isChecked())
+            self.overlay_opacity_label = QtWidgets.QLabel(f"{int(round(self.overlay_opacity * 100))}%")
+            self.overlay_opacity_label.setMinimumWidth(36)
+            overlay_layout.addWidget(self.overlay_opacity_label)
+            layout.addLayout(overlay_layout)
+            self._on_overlay_toggled(self.overlay_checkbox.isChecked())
         
         # Info
         self.info_label = QtWidgets.QLabel()
@@ -671,10 +671,10 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
             'window_level': (self.wl_combo.currentData() or 'displayed'),
             'frame_start': self.start_spinbox.value(),
             'frame_stop': self.end_spinbox.value() + 1,
-            'mask_enabled': bool(self.has_mask and self.mask_checkbox is not None and self.mask_checkbox.isChecked()),
-            'mask_opacity': (
-                float(self.mask_opacity_slider.value()) / 100.0
-                if self.has_mask and self.mask_opacity_slider is not None
+            'overlay_enabled': bool(self.has_overlay and self.overlay_checkbox is not None and self.overlay_checkbox.isChecked()),
+            'overlay_opacity': (
+                float(self.overlay_opacity_slider.value()) / 100.0
+                if self.has_overlay and self.overlay_opacity_slider is not None
                 else 0.0
             ),
         }
@@ -690,15 +690,15 @@ class VideoExportSettingsDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    def _on_mask_toggled(self, checked):
-        if self.mask_opacity_slider is not None:
-            self.mask_opacity_slider.setEnabled(bool(checked))
-        if self.mask_opacity_label is not None:
-            self.mask_opacity_label.setEnabled(bool(checked))
+    def _on_overlay_toggled(self, checked):
+        if self.overlay_opacity_slider is not None:
+            self.overlay_opacity_slider.setEnabled(bool(checked))
+        if self.overlay_opacity_label is not None:
+            self.overlay_opacity_label.setEnabled(bool(checked))
 
-    def _on_mask_opacity_changed(self, value):
-        if self.mask_opacity_label is not None:
-            self.mask_opacity_label.setText(f"{int(value)}%")
+    def _on_overlay_opacity_changed(self, value):
+        if self.overlay_opacity_label is not None:
+            self.overlay_opacity_label.setText(f"{int(value)}%")
 
     def _sync_range_spinboxes(self, lower_value, upper_value):
         old_lower = self.start_spinbox.value()

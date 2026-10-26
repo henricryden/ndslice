@@ -5,7 +5,7 @@ import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
-MASK_LABEL_MAX = np.iinfo(np.uint8).max
+OVERLAY_LABEL_MAX = np.iinfo(np.uint8).max
 
 _SPATIAL_UNIT_LABELS = {
     'm': 'm',
@@ -123,18 +123,18 @@ def _friendly_format_name(value):
     return names.get(str(value), str(value).replace('_', ' ').upper())
 
 
-def _base_mask_label_counts(mask_data):
-    counts = np.zeros(MASK_LABEL_MAX + 1, dtype=np.int64)
-    if mask_data.size == 0:
+def _base_overlay_label_counts(overlay_data):
+    counts = np.zeros(OVERLAY_LABEL_MAX + 1, dtype=np.int64)
+    if overlay_data.size == 0:
         return counts
     return np.bincount(
-        np.ravel(mask_data),
-        minlength=MASK_LABEL_MAX + 1,
-    )[:MASK_LABEL_MAX + 1]
+        np.ravel(overlay_data),
+        minlength=OVERLAY_LABEL_MAX + 1,
+    )[:OVERLAY_LABEL_MAX + 1]
 
 
-def _mask_physical_statistics(
-        data_shape, mask_data, voxel_spacing, has_voxel_spacing_metadata,
+def _overlay_physical_statistics(
+        data_shape, overlay_data, voxel_spacing, has_voxel_spacing_metadata,
         spatial_unit):
     spatial_dims = [
         dim for dim, spacing in enumerate(voxel_spacing)
@@ -147,15 +147,15 @@ def _mask_physical_statistics(
 
     varying_unspaced_dims = [
         dim for dim, spacing in enumerate(voxel_spacing)
-        if spacing is None and mask_data.shape[dim] > 1
+        if spacing is None and overlay_data.shape[dim] > 1
     ]
     if varying_unspaced_dims:
         dims = ", ".join(str(dim) for dim in varying_unspaced_dims)
-        return None, f"mask varies along dimensions without spatial spacing: {dims}"
+        return None, f"overlay varies along dimensions without spatial spacing: {dims}"
 
-    counts = _base_mask_label_counts(mask_data)
+    counts = _base_overlay_label_counts(overlay_data)
     spatial_broadcast_factor = math.prod(
-        data_shape[dim] // mask_data.shape[dim]
+        data_shape[dim] // overlay_data.shape[dim]
         for dim in spatial_dims
     )
     counts *= spatial_broadcast_factor
@@ -180,36 +180,36 @@ def _format_physical_measure(value, power, spatial_unit, include_ml=True):
     return text
 
 
-def _mask_metadata_model(
-        data_shape, mask_data, mask_positive_labels, dim_labels,
+def _overlay_metadata_model(
+        data_shape, overlay_data, overlay_positive_labels, dim_labels,
         voxel_spacing, has_voxel_spacing_metadata, spatial_unit,
-        label_colors, mask_label_values):
-    physical, unavailable_reason = _mask_physical_statistics(
+        label_colors, overlay_label_values):
+    physical, unavailable_reason = _overlay_physical_statistics(
         data_shape,
-        mask_data,
+        overlay_data,
         voxel_spacing,
         has_voxel_spacing_metadata,
         spatial_unit,
     )
-    counts = physical['counts'] if physical is not None else _base_mask_label_counts(mask_data)
+    counts = physical['counts'] if physical is not None else _base_overlay_label_counts(overlay_data)
     total_count = int(np.sum(counts))
     labeled_count = int(np.sum(counts[1:]))
     coverage = 100 * labeled_count / total_count if total_count else 0.0
 
     broadcast_dims = [
-        dim for dim, (mask_size, data_size) in enumerate(zip(mask_data.shape, data_shape))
-        if mask_size == 1 and data_size > 1
+        dim for dim, (overlay_size, data_size) in enumerate(zip(overlay_data.shape, data_shape))
+        if overlay_size == 1 and data_size > 1
     ]
-    mask_shape = [
-        size for dim, size in enumerate(mask_data.shape)
+    overlay_shape = [
+        size for dim, size in enumerate(overlay_data.shape)
         if dim not in broadcast_dims
     ] or [1]
 
     power = physical['power'] if physical is not None else None
     count_header = {2: 'Pixels', 3: 'Voxels'}.get(power, 'Elements')
     summary_rows = [
-        ('Shape', _shape_text(mask_shape)),
-        ('Labels', str(len(mask_positive_labels))),
+        ('Shape', _shape_text(overlay_shape)),
+        ('Labels', str(len(overlay_positive_labels))),
         (
             'Coverage',
             f"{labeled_count:,} / {total_count:,} "
@@ -245,11 +245,11 @@ def _mask_metadata_model(
         measure_header = f"{measure_name} ({unit_text})"
 
     labels = []
-    for value in mask_positive_labels:
+    for value in overlay_positive_labels:
         label = int(value)
         source_label = (
-            mask_label_values[label]
-            if label < len(mask_label_values)
+            overlay_label_values[label]
+            if label < len(overlay_label_values)
             else label
         )
         label_count = int(counts[label])
@@ -298,8 +298,8 @@ def _scaling_rows(metadata):
 
 def build_metadata_model(
         data, metadata, dim_labels, voxel_spacing,
-        has_voxel_spacing_metadata=False, mask_data=None,
-        mask_positive_labels=(), label_colors=None, mask_label_values=None):
+        has_voxel_spacing_metadata=False, overlay_data=None,
+        overlay_positive_labels=(), label_colors=None, overlay_label_values=None):
     metadata = clean_metadata(metadata)
     spatial_unit = metadata.get('spatial_unit')
     model = {
@@ -360,19 +360,19 @@ def build_metadata_model(
     conversion_rows.extend(_scaling_rows(metadata))
     model['conversion_rows'] = conversion_rows
 
-    if mask_data is None:
-        model['mask'] = None
+    if overlay_data is None:
+        model['overlay'] = None
     else:
-        model['mask'] = _mask_metadata_model(
+        model['overlay'] = _overlay_metadata_model(
             data.shape,
-            mask_data,
-            mask_positive_labels,
+            overlay_data,
+            overlay_positive_labels,
             dim_labels,
             voxel_spacing,
             has_voxel_spacing_metadata,
             spatial_unit,
             label_colors or {},
-            mask_label_values if mask_label_values is not None else (),
+            overlay_label_values if overlay_label_values is not None else (),
         )
 
     model['additional_metadata'] = {
@@ -418,16 +418,16 @@ def metadata_copy_text(model):
 
     add_rows('Conversion', model.get('conversion_rows', []))
 
-    mask = model.get('mask')
-    if mask is not None:
-        add_rows('Mask', mask['summary_rows'])
-        header = ["Label", mask['count_header'], "% of mask"]
-        if mask.get('measure_header'):
-            header.append(mask['measure_header'])
+    overlay = model.get('overlay')
+    if overlay is not None:
+        add_rows('Overlay', overlay['summary_rows'])
+        header = ["Label", overlay['count_header'], "% of overlay"]
+        if overlay.get('measure_header'):
+            header.append(overlay['measure_header'])
         sections.append(" | ".join(header))
-        for label in mask['labels']:
+        for label in overlay['labels']:
             row = [label['label'], label['count'], label['share']]
-            if mask.get('measure_header'):
+            if overlay.get('measure_header'):
                 row.append(label['measure'])
             sections.append(" | ".join(row))
 
@@ -450,8 +450,8 @@ class MetadataDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         tabs = QtWidgets.QTabWidget(self)
         tabs.addTab(self._create_overview_tab(), "Overview")
-        if model.get('mask') is not None:
-            tabs.addTab(self._create_mask_tab(), "Mask")
+        if model.get('overlay') is not None:
+            tabs.addTab(self._create_overlay_tab(), "Overlay")
         if model.get('additional_metadata'):
             tabs.addTab(self._create_additional_tab(), "Additional metadata")
         layout.addWidget(tabs, 1)
@@ -545,23 +545,23 @@ class MetadataDialog(QtWidgets.QDialog):
             self._add_form_rows(layout, conversion_rows, tab)
         return tab
 
-    def _create_mask_tab(self):
-        mask = self._model['mask']
+    def _create_overlay_tab(self):
+        overlay = self._model['overlay']
         tab = QtWidgets.QWidget(self)
         layout = QtWidgets.QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        layout.addWidget(self._section_label("Mask", tab))
-        self._add_form_rows(layout, mask['summary_rows'], tab)
+        layout.addWidget(self._section_label("Overlay", tab))
+        self._add_form_rows(layout, overlay['summary_rows'], tab)
         layout.addWidget(self._section_label("Labels", tab))
 
-        headers = ["Label", mask['count_header'], "% of mask"]
-        if mask.get('measure_header'):
-            headers.append(mask['measure_header'])
+        headers = ["Label", overlay['count_header'], "% of overlay"]
+        if overlay.get('measure_header'):
+            headers.append(overlay['measure_header'])
         row_values = []
-        for label in mask['labels']:
+        for label in overlay['labels']:
             values = [label['label'], label['count'], label['share']]
-            if mask.get('measure_header'):
+            if overlay.get('measure_header'):
                 values.append(label['measure'])
             row_values.append(values)
 
@@ -570,9 +570,9 @@ class MetadataDialog(QtWidgets.QDialog):
         label_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         label_header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
         label_header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        if mask.get('measure_header'):
+        if overlay.get('measure_header'):
             label_header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        for row, label in enumerate(mask['labels']):
+        for row, label in enumerate(overlay['labels']):
             pixmap = QtGui.QPixmap(14, 14)
             pixmap.fill(QtGui.QColor(*label['color']))
             label_table.item(row, 0).setIcon(QtGui.QIcon(pixmap))
