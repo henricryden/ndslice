@@ -1,10 +1,23 @@
 # Changelog
 
 
-## [0.10.0]
+## [0.11.0]
 
 ### Added
 - Automatic DICOM header window/level display.
+- DICOM native-plane startup and A/C/S shortcuts for axial/coronal/sagittal views.
+
+### Changed
+- Overlays support up to 255 sparse labels.
+- Renamed overlay arguments to Python `overlay=` and CLI `--overlay` throughout.
+
+### Fixed
+- File type detection for filenames containing dots (e.g. `my.file.nii.gz`).
+
+
+## [0.10.0]
+
+### Added
 - Native light/dark appearance support with persistent System, Light, and Dark settings.
 - Array metadata dialog and DICOM tag browser with fuzzy search.
 - Configurable DICOM/NIfTI intensity scaling (scaled/raw pixel values)
@@ -13,6 +26,9 @@
 - PyQt6 6.8 or newer is now required (PyQt5 support removed)
 - ndslice now uses the native platform widget style instead of forcing Fusion.
 - Adopted SPEC 0 with Python 3.12, NumPy 2.2, and SciPy 1.15 minimums.
+
+### Fixed
+- DICOM volume metadata and slice navigation.
 
 
 
