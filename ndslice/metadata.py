@@ -32,6 +32,7 @@ _CONSUMED_METADATA_KEYS = {
     'nifti_output_path',
     'sidecar_json_path',
     'converted_output_names',
+    'converted_output_affines',
     'stacked_dimension',
     'stacked_dimension_key',
     'stacked_dimension_values',

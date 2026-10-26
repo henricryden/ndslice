@@ -644,6 +644,10 @@ class DicomDirectoryLoader:
                 'dicom_files': dicom_records,
                 'converted_output_names': [Path(path).name for path in nifti_paths],
             })
+            if len(nifti_affines) == 1:
+                self.metadata['affine'] = nifti_affines[0]
+            else:
+                self.metadata['converted_output_affines'] = nifti_affines
             if self.apply_scaling and len(nifti_scaling_transforms) > 1:
                 self.metadata['applied_scale_axis'] = data.ndim - 1
                 self.metadata['applied_scale_transforms'] = nifti_scaling_transforms

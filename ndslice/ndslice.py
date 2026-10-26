@@ -805,10 +805,17 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             w = self.widgets['spins']['slice_indices'][i]
             self.dim_containers[i].layout().addWidget(w)
             w.valueChanged.connect(self.update)
+            w.installEventFilter(self)
+            w.lineEdit().installEventFilter(self)
         
         self._setup_export_context_menus()
         self._save_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Save, self)
         self._save_shortcut.activated.connect(self._save_current_numpy_file)
+        self._anatomical_shortcuts = []
+        for key, plane in (('A', 'axial'), ('C', 'coronal'), ('S', 'sagittal')):
+            shortcut = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            shortcut.activated.connect(lambda plane=plane: self._show_anatomical_view(plane))
+            self._anatomical_shortcuts.append(shortcut)
         
         # Create a single compact control panel with all radio buttons
         controls_widget = QtWidgets.QWidget()
@@ -3033,6 +3040,71 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.changedIndex(event, 0, old_secondary, update=False)
         self.changedIndex(event, 1, old_primary, update=True)
 
+    def _anatomical_plane_orientation(self, plane):
+        """Find ndarray dimensions and radiological flips from patient geometry."""
+        up_axis, right_axis = {
+            'axial': (1, 0), 'coronal': (2, 0), 'sagittal': (2, 1),
+        }[plane]
+        affine = self.metadata.get('affine')
+        outputs = self.metadata.get('converted_output_affines')
+        if outputs:
+            output_axis = self.data.ndim - 1
+            if output_axis in self.selected_indices:
+                return None
+            index = self.widgets['spins']['slice_indices'][output_axis].value()
+            if index >= len(outputs):
+                return None
+            affine = outputs[index]
+        if affine is not None:
+            try:
+                affine = np.asarray(affine, dtype=float)
+                if affine.shape != (4, 4) or not np.all(np.isfinite(affine)):
+                    return None
+                dims = list(range(min(3, self.data.ndim)))
+                directions = affine[:3, dims].T
+            except (TypeError, ValueError):
+                return None
+        else:
+            # Single-file DICOMs have the two in-plane directions only.
+            records = [record for record in self._dicom_records() if record.get('navigable')]
+            if not records:
+                return None
+            record = records[0]
+            try:
+                dims = [int(dim) for dim in record.get('in_plane_dims', [])]
+                directions = np.asarray(record.get('in_plane_directions'), dtype=float)
+                if directions.shape != (len(dims), 3) or not np.all(np.isfinite(directions)):
+                    return None
+            except (TypeError, ValueError):
+                return None
+        if not len(dims) or np.any(np.linalg.norm(directions, axis=1) == 0):
+            return None
+        axes = np.argmax(np.abs(directions), axis=1).tolist()
+        if len(set(axes)) != len(axes) or up_axis not in axes or right_axis not in axes:
+            return None
+        y, x = axes.index(up_axis), axes.index(right_axis)
+        selected = [dims[y], dims[x]]
+        if any(dim < 0 or dim >= self.data.ndim or self.singleton[dim] for dim in selected):
+            return None
+        return selected, [bool(directions[y, up_axis] < 0),
+                          bool(directions[x, right_axis] > 0)]
+
+    def _show_anatomical_view(self, plane):
+        if (any(domain != Domain.NATIVE for domain in self.domain)
+                or any(self.combined_as_complex)):
+            return False
+        orientation = self._anatomical_plane_orientation(plane)
+        if orientation is None:
+            return False
+        self.selected_indices, flips = orientation
+        for dim, flipped in zip(self.selected_indices, flips):
+            self.axis_flipped[dim] = flipped
+        if self.is_line_plot_mode():
+            self.tab_widget.setCurrentIndex(0)
+        self.update_dimension_controls()
+        self.update()
+        return True
+
     def update(self):
         self.update_slice()
         self.update_image_view()
@@ -3133,7 +3205,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         """Handle keyboard shortcuts"""
         key = event.key()
         modifiers = event.modifiers()
-        
+
         # Check for 'T' key to transpose view (swap X and Y dimensions)
         if key == QtCore.Qt.Key.Key_T and modifiers == QtCore.Qt.KeyboardModifier.NoModifier:
             if not self.is_line_plot_mode() and len(self.selected_indices) >= 2:
@@ -3281,6 +3353,13 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         return pg.ColorMap(pos=np.array(positions), color=np.array(colors))
     
     def eventFilter(self, obj, event):
+        if (event.type() == QtCore.QEvent.Type.ShortcutOverride
+                and event.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier
+                and event.key() in (QtCore.Qt.Key.Key_A, QtCore.Qt.Key.Key_C, QtCore.Qt.Key.Key_S)):
+            # Numeric slice editors otherwise reserve letter keys before
+            # the window shortcuts have a chance to handle them.
+            event.ignore()
+            return True
         if obj == self.tab_widget.tabBar():
             if event.type() == QtCore.QEvent.Type.MouseMove:
                 tab_bar = self.tab_widget.tabBar()
