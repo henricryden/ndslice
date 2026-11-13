@@ -13,6 +13,10 @@
 
 ### Fixed
 - File type detection for filenames containing dots (e.g. `my.file.nii.gz`).
+- Startup rendering
+- View preservation on reload
+- Full source paths in array info view
+
 
 
 ## [0.10.0]
