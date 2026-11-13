@@ -102,9 +102,9 @@ class DatasetSelector:
         """Build the tree widget. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement _build_tree()")
     
-    def show(self):
+    def show(self, parent=None):
         """Show the selector dialog and return the selected dataset name."""
-        dialog = self._create_dialog()
+        dialog = self._create_dialog(parent=parent)
         result = dialog.exec()
         
         if result == self.QtWidgets.QDialog.DialogCode.Accepted and self.selected_dataset:
@@ -175,9 +175,9 @@ class DatasetSelector:
             self.close()
             return True
     
-    def _create_dialog(self):
+    def _create_dialog(self, parent=None):
         """Create and configure the dialog widget."""
-        dialog = self.QtWidgets.QDialog()
+        dialog = self.QtWidgets.QDialog(parent)
         dialog.setWindowTitle(f"Select Dataset - {self.filepath.name}")
         dialog.resize(600, 400)
         

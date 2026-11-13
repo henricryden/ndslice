@@ -997,7 +997,25 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.tab_widget.tabBar().installEventFilter(self)
         
         # Add tab widget to the main layout
-        self.layouts['topDown'].addWidget(self.tab_widget)
+        self._dataset_sidebar = QtWidgets.QWidget()
+        sidebar_layout = QtWidgets.QVBoxLayout(self._dataset_sidebar)
+        sidebar_layout.setContentsMargins(4, 0, 0, 0)
+        sidebar_layout.addWidget(QtWidgets.QLabel('Datasets'))
+        self._dataset_tree = QtWidgets.QTreeWidget()
+        self._dataset_tree.setHeaderLabels(['Dataset', 'Shape'])
+        self._dataset_tree.setRootIsDecorated(False)
+        self._dataset_tree.setColumnWidth(0, 140)
+        self._dataset_tree.setMinimumWidth(0)
+        self._dataset_tree.currentItemChanged.connect(self._choose_dataset)
+        sidebar_layout.addWidget(self._dataset_tree)
+        self._dataset_sidebar.hide()
+        self._dataset_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self._dataset_splitter.addWidget(self.tab_widget)
+        self._dataset_splitter.addWidget(self._dataset_sidebar)
+        self._dataset_splitter.setStretchFactor(0, 1)
+        self._dataset_splitter.setStretchFactor(1, 0)
+        self._dataset_splitter.setSizes([560, 240])
+        self.layouts['topDown'].addWidget(self._dataset_splitter)
 
         # Reload / file-changed button (⟳ by default, ⚠️ when file changes on disk)
         self._reload_btn = QtWidgets.QPushButton("⟳")
@@ -1012,6 +1030,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._reload_btn.setVisible(filepath is not None)
         self._set_emoji_font(self._reload_btn)
         self.layouts['topUp'].addWidget(self._reload_btn)
+        self._dataset_btn = QtWidgets.QToolButton(self)
+        self._dataset_btn.setText('\U0001F5C2\uFE0E')  # Request text presentation.
+        self._set_emoji_font(self._dataset_btn)
+        self._dataset_btn.setAutoRaise(True)
+        self._dataset_btn.setFixedSize(28, 24)
+        self._dataset_btn.setCheckable(True)
+        self._dataset_btn.toggled.connect(self._dataset_sidebar.setVisible)
+        self._sync_dataset_button()
         self.layouts['topUp'].addWidget(self.widgets['labels']['pixelValue'])
         self.layouts['topUp'].addWidget(self.widgets['labels']['arrayInfo'])
         self.layouts['topUp'].addStretch(1)
@@ -1024,6 +1050,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         self._settings_btn = self._create_settings_button()
         self.layouts['topUp'].addWidget(self._settings_btn)
+        self.layouts['topUp'].addWidget(self._dataset_btn)
 
         self.layouts['botLeft'].addLayout(self.layouts['dims'])
         
@@ -3658,6 +3685,79 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if self._file_watcher:
             self._file_watcher.addPath(path)
 
+    def _open_dataset_selector(self):
+        from . import selectors
+        supported = ('H5DatasetSelector', 'RieslingH5DatasetSelector',
+                     'NpzDatasetSelector', 'MatDatasetSelector')
+        if self._filepath is None or self._selector_class_name not in supported:
+            return None
+        return getattr(selectors, self._selector_class_name)(Path(self._filepath))
+
+    def _sync_dataset_button(self):
+        selector = None
+        datasets = []
+        try:
+            selector = self._open_dataset_selector()
+            available = selector is not None and selector.requires_gui()
+            if selector is not None:
+                datasets = selector.compatible_datasets
+        except Exception:
+            # The source may have been removed; reload reports access errors.
+            available = False
+        finally:
+            if selector is not None:
+                selector.close()
+        self._dataset_btn.setVisible(available)
+        if not available:
+            self._dataset_btn.setChecked(False)
+        self._dataset_btn.setToolTip(
+            f'Show/hide datasets (current: {self._dataset_path})')
+        scroll = self._dataset_tree.verticalScrollBar().value()
+        with QtCore.QSignalBlocker(self._dataset_tree):
+            self._dataset_tree.clear()
+            for entry in datasets:
+                name, shape = entry[:2]
+                item = QtWidgets.QTreeWidgetItem([
+                    str(name), ' × '.join(str(size) for size in shape)])
+                item.setData(0, QtCore.Qt.ItemDataRole.UserRole, name)
+                item.setToolTip(0, str(name))
+                item.setToolTip(1, item.text(1))
+                self._dataset_tree.addTopLevelItem(item)
+                if name == self._dataset_path:
+                    self._dataset_tree.setCurrentItem(item)
+            self._dataset_tree.verticalScrollBar().setValue(scroll)
+
+    def _choose_dataset(self, item, _previous=None):
+        if item is None:
+            return
+        selected = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if selected is None or selected == self._dataset_path:
+            return
+        selector = None
+        try:
+            selector = self._open_dataset_selector()
+            if selector is None:
+                return
+            data = selector.load_data(selected)
+            labels = selector.dim_labels_for_path(selected, data.ndim)
+            spacing = selector.voxel_spacing_for_path(selected, data.ndim)
+            metadata = selector.metadata_for_path(selected, data)
+        except Exception as error:
+            QtWidgets.QMessageBox.warning(self, 'Dataset Error', f'Failed to load dataset:\n{error}')
+            self._sync_dataset_button()
+            return
+        finally:
+            if selector is not None:
+                selector.close()
+
+        self._dataset_path = selected
+        self.setWindowTitle(f'{Path(self._filepath).name} - {selected}')
+        self._reset_data(data,
+                         dim_labels=self._clean_dim_labels(labels, data.ndim),
+                         voxel_spacing=self._clean_voxel_spacing(spacing, data.ndim),
+                         metadata=metadata)
+        self._sync_dataset_button()
+
     def _reload_file(self, _checked=False, apply_scaling=None):
         """Reload data while preserving the current view where possible."""
         if self._filepath is None:
@@ -3748,6 +3848,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             )
             self._reload_btn.setText("⟳")
             self._reload_btn.setToolTip("Reload file")
+            self._sync_dataset_button()
             if self._file_watcher and self._filepath:
                 self._file_watcher.addPath(str(self._filepath))
             return True
