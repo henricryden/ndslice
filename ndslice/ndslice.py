@@ -744,99 +744,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             'hover': QtWidgets.QHBoxLayout()
         }
         
-        for i, label in enumerate(self.widgets['labels']['dims']):
-            label.mousePressEvent = lambda event, i=i, l=label: self.dimClicked(event, l, i)
-            label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-            label.setToolTip(f"Apply centered FFT along dim {i}")
+        self._build_dimension_controls()
 
-        
-        # Set up flip labels with click handlers
-        for i, flip_label in enumerate(self.widgets['labels']['flip']):
-            flip_label.mousePressEvent = lambda event, i=i: self.flipAxisClicked(event, i)
-            flip_label.setStyleSheet(self.FLIP_ICON_STYLE)
-            flip_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
-            self._set_emoji_font(flip_label)
-        
-        # Set up complex indicator labels with click handlers
-        for i, complex_label in enumerate(self.widgets['labels']['complex']):
-            complex_label.mousePressEvent = lambda event, i=i: self.complexOrRealClicked(event, i)
-            complex_label.setStyleSheet(self.FLIP_ICON_STYLE)
-            complex_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-            self._set_emoji_font(complex_label)
-        
-        # Apply compact styling to dimension control widgets
-        for label in self.widgets['labels']['dims']:
-            label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
-            label.setMinimumHeight(24)
-            label.setMinimumWidth(30)
-        
-        for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
-            btn.setStyleSheet(self.BUTTON_STYLE)
-
-        self._apply_dimension_button_labels()
-            
-        for spin in self.widgets['spins']['slice_indices']:
-            spin.setStyleSheet(self.SPINBOX_STYLE)
-        
-        # Set minimal spacing for all control layouts
-        self.layouts['dims'].setSpacing(2)  # Extra tight for dimensions row
-        self.layouts['dims'].setContentsMargins(0, 0, 0, 0)  # Remove all margins
-        self.layouts['primary'].setSpacing(2)  # Tighter spacing
-        self.layouts['primary'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
-        self.layouts['secondary'].setSpacing(2)  # Tighter spacing
-        self.layouts['secondary'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
-        self.layouts['slice'].setSpacing(2)  # Tighter spacing
-        self.layouts['slice'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
-        
-        # For each dimension, create a QVBoxLayout with flip icon + dim label above primary button
-        dim_containers = []
-        for i in range(data.ndim):
-            # Create a container widget for this dimension column
-            container = QtWidgets.QWidget()
-            container_layout = QtWidgets.QVBoxLayout()
-            container_layout.setSpacing(0)
-            container_layout.setContentsMargins(0, 0, 0, 0)
-            
-            # Create horizontal layout for flip icon + dimension label
-            label_row = QtWidgets.QWidget()
-            label_layout = QtWidgets.QHBoxLayout()
-            label_layout.setSpacing(0)
-            label_layout.setContentsMargins(0, 0, 0, 0)
-            
-            # Add flip icon (left-aligned)
-            label_layout.addWidget(self.widgets['labels']['flip'][i])
-            # Add dimension label (centered, takes remaining space)
-            self.widgets['labels']['dims'][i].setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            label_layout.addWidget(self.widgets['labels']['dims'][i], 1)
-            # Add complex indicator (ℝ/ℂ)
-            label_layout.addWidget(self.widgets['labels']['complex'][i])
-            
-            label_row.setLayout(label_layout)
-            container_layout.addWidget(label_row)
-            
-            container.setLayout(container_layout)
-            dim_containers.append(container)
-            self.layouts['dims'].addWidget(container)
-        
-        # Store containers for later access
-        self.dim_containers = dim_containers
-        
-        # Add all buttons and spinboxes to their vertical containers
-        for i in range(data.ndim):
-            w = self.widgets['buttons']['primary'][i]
-            self.dim_containers[i].layout().addWidget(w)
-            w.clicked.connect(lambda checked, i=i : self.changedIndex(checked, 0, i))
-            
-            w = self.widgets['buttons']['secondary'][i]
-            self.dim_containers[i].layout().addWidget(w)
-            w.clicked.connect(lambda checked, i=i: self.changedIndex(checked, 1, i))
-            
-            w = self.widgets['spins']['slice_indices'][i]
-            self.dim_containers[i].layout().addWidget(w)
-            w.valueChanged.connect(self.update)
-            w.installEventFilter(self)
-            w.lineEdit().installEventFilter(self)
-        
         self._setup_export_context_menus()
         self._save_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Save, self)
         self._save_shortcut.activated.connect(self._save_current_numpy_file)
@@ -1180,6 +1089,133 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
 
 
+
+
+    def _rebuild_dimension_controls(self):
+        """Replace dimension columns without replacing the viewer window."""
+        indices = [spin.value() for spin in self.widgets['spins']['slice_indices']]
+        while self.layouts['dims'].count():
+            column = self.layouts['dims'].takeAt(0).widget()
+            column.hide()
+            column.deleteLater()
+        for name in ('primary', 'secondary'):
+            self.widgets['buttons'][name] = [
+                QtWidgets.QPushButton(self._dimension_display_name(i), checkable=True)
+                for i in range(self.data.ndim)]
+        for name in ('dims', 'flip', 'complex'):
+            self.widgets['labels'][name] = [
+                QtWidgets.QLabel(f'[{size}]' if name == 'dims' else '')
+                for size in self.data.shape]
+        spins = []
+        for dim, size in enumerate(self.data.shape):
+            spin = QtWidgets.QSpinBox(minimum=0, maximum=size - 1)
+            if dim < len(indices):
+                index = indices[dim]
+            elif self._viewer_config.initial_index == INITIAL_INDEX_CENTER:
+                index = (size - 1) // 2
+            elif self._viewer_config.initial_index == INITIAL_INDEX_LAST:
+                index = size - 1
+            else:
+                index = 0
+            spin.setValue(min(index, size - 1))
+            spins.append(spin)
+        self.widgets['spins']['slice_indices'] = spins
+        self._build_dimension_controls()
+        self._setup_export_context_menus()
+
+    def _build_dimension_controls(self):
+        for i, label in enumerate(self.widgets['labels']['dims']):
+            label.mousePressEvent = lambda event, i=i, l=label: self.dimClicked(event, l, i)
+            label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+            label.setToolTip(f"Apply centered FFT along dim {i}")
+
+
+        # Set up flip labels with click handlers
+        for i, flip_label in enumerate(self.widgets['labels']['flip']):
+            flip_label.mousePressEvent = lambda event, i=i: self.flipAxisClicked(event, i)
+            flip_label.setStyleSheet(self.FLIP_ICON_STYLE)
+            flip_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            self._set_emoji_font(flip_label)
+
+        # Set up complex indicator labels with click handlers
+        for i, complex_label in enumerate(self.widgets['labels']['complex']):
+            complex_label.mousePressEvent = lambda event, i=i: self.complexOrRealClicked(event, i)
+            complex_label.setStyleSheet(self.FLIP_ICON_STYLE)
+            complex_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            self._set_emoji_font(complex_label)
+
+        # Apply compact styling to dimension control widgets
+        for label in self.widgets['labels']['dims']:
+            label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
+            label.setMinimumHeight(24)
+            label.setMinimumWidth(30)
+
+        for btn in self.widgets['buttons']['primary'] + self.widgets['buttons']['secondary']:
+            btn.setStyleSheet(self.BUTTON_STYLE)
+
+        self._apply_dimension_button_labels()
+
+        for spin in self.widgets['spins']['slice_indices']:
+            spin.setStyleSheet(self.SPINBOX_STYLE)
+
+        # Set minimal spacing for all control layouts
+        self.layouts['dims'].setSpacing(2)  # Extra tight for dimensions row
+        self.layouts['dims'].setContentsMargins(0, 0, 0, 0)  # Remove all margins
+        self.layouts['primary'].setSpacing(2)  # Tighter spacing
+        self.layouts['primary'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
+        self.layouts['secondary'].setSpacing(2)  # Tighter spacing
+        self.layouts['secondary'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
+        self.layouts['slice'].setSpacing(2)  # Tighter spacing
+        self.layouts['slice'].setContentsMargins(0, 1, 0, 1)  # Minimal margins
+
+        # For each dimension, create a QVBoxLayout with flip icon + dim label above primary button
+        dim_containers = []
+        for i in range(self.data.ndim):
+            # Create a container widget for this dimension column
+            container = QtWidgets.QWidget()
+            container_layout = QtWidgets.QVBoxLayout()
+            container_layout.setSpacing(0)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Create horizontal layout for flip icon + dimension label
+            label_row = QtWidgets.QWidget()
+            label_layout = QtWidgets.QHBoxLayout()
+            label_layout.setSpacing(0)
+            label_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Add flip icon (left-aligned)
+            label_layout.addWidget(self.widgets['labels']['flip'][i])
+            # Add dimension label (centered, takes remaining space)
+            self.widgets['labels']['dims'][i].setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            label_layout.addWidget(self.widgets['labels']['dims'][i], 1)
+            # Add complex indicator (ℝ/ℂ)
+            label_layout.addWidget(self.widgets['labels']['complex'][i])
+
+            label_row.setLayout(label_layout)
+            container_layout.addWidget(label_row)
+
+            container.setLayout(container_layout)
+            dim_containers.append(container)
+            self.layouts['dims'].addWidget(container)
+
+        # Store containers for later access
+        self.dim_containers = dim_containers
+
+        # Add all buttons and spinboxes to their vertical containers
+        for i in range(self.data.ndim):
+            w = self.widgets['buttons']['primary'][i]
+            self.dim_containers[i].layout().addWidget(w)
+            w.clicked.connect(lambda checked, i=i : self.changedIndex(checked, 0, i))
+
+            w = self.widgets['buttons']['secondary'][i]
+            self.dim_containers[i].layout().addWidget(w)
+            w.clicked.connect(lambda checked, i=i: self.changedIndex(checked, 1, i))
+
+            w = self.widgets['spins']['slice_indices'][i]
+            self.dim_containers[i].layout().addWidget(w)
+            w.valueChanged.connect(self.update)
+            w.installEventFilter(self)
+            w.lineEdit().installEventFilter(self)
 
 
     def _metadata_applied_scaling(self):
@@ -3723,26 +3759,11 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
+        previous_geometry = self.geometry()
+        previous_view = self.img_view.getView().getState()
+        previous_line_view = self.plot_widget.getViewBox().getState()
         previous_levels = self.img_view.getLevels()
         previous_channel, previous_scale = self.channel, self.scale
-
-        if new_ndim != old_ndim:
-            # Per-dimension widgets were built for old_ndim and cannot be rebuilt in-place.
-            # Open a fresh window with the new data and close this one.
-            win = NDSliceWindow(new_data,
-                                filepath=self._filepath,
-                                dataset_path=self._dataset_path,
-                                selector_class_name=self._selector_class_name,
-                                config_path=self._config_path,
-                                dim_labels=dim_labels if dim_labels is not None else self.dim_labels,
-                                voxel_spacing=voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
-                                overlay=self.overlay_data,
-                                metadata=metadata if metadata is not None else self.metadata)
-            win.overlay_label_values = self.overlay_label_values
-            win.setWindowTitle(self.windowTitle())
-            win.show()
-            self.close()
-            return
 
         self.data = new_data
         if metadata is not None:
@@ -3778,9 +3799,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             voxel_spacing if voxel_spacing is not None else self.voxel_spacing,
             new_ndim,
         )
-        if dim_labels is not None:
-            self.dim_labels = self._clean_dim_labels(dim_labels, new_ndim)
-            self._apply_dimension_button_labels()
+        self.dim_labels = self._clean_dim_labels(
+            dim_labels if dim_labels is not None else self.dim_labels, new_ndim)
         self._refresh_runtime_metadata()
         if hasattr(self, '_metadata_btn'):
             self._metadata_btn.setVisible(self._has_conventional_metadata)
@@ -3793,9 +3813,14 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         else:
             self.can_combine_as_complex = [new_data.shape[i] == 2 for i in range(new_ndim)]
         self.combined_as_complex = [False] * new_ndim
+        self.axis_flipped = (self.axis_flipped[:new_ndim]
+                             + [False] * max(0, new_ndim - old_ndim))
 
         # Reset FFT domain state and dim label styling
         self.domain = [Domain.NATIVE for _ in range(new_ndim)]
+        if new_ndim != old_ndim:
+            self._rebuild_dimension_controls()
+        self._apply_dimension_button_labels()
         for i, label in enumerate(self.widgets['labels']['dims']):
             label.setStyleSheet(self.DIMENSION_LABEL_STYLE)
             label.setText(f'[{new_data.shape[i]}]')
@@ -3820,10 +3845,18 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         # Clamp line_plot_dimension
         if self.line_plot_dimension >= new_ndim or self.singleton[self.line_plot_dimension]:
+            self.line_plot_dimension = 0
             for d in range(new_ndim):
                 if not self.singleton[d]:
                     self.line_plot_dimension = d
                     break
+
+        with QtCore.QSignalBlocker(self.tab_widget):
+            self.tab_widget.setTabEnabled(0, new_ndim > 1)
+            if new_ndim == 1:
+                self.tab_widget.setCurrentIndex(1)
+            elif old_ndim == 1:
+                self.tab_widget.setCurrentIndex(0)
 
         self._update_channel_controls()
         self.update_complex_indicators()
@@ -3837,6 +3870,10 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         if (previous_levels is not None
                 and (self.channel, self.scale) == (previous_channel, previous_scale)):
             self.img_view.setLevels(*previous_levels)
+        if self.geometry() != previous_geometry:
+            self.setGeometry(previous_geometry)
+        self.img_view.getView().setState(previous_view)
+        self.plot_widget.getViewBox().setState(previous_line_view)
 
 
 def _prepare_qt_environment():
