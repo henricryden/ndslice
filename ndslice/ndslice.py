@@ -3623,7 +3623,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
             self._file_watcher.addPath(path)
 
     def _reload_file(self, _checked=False, apply_scaling=None):
-        """Reload data from the source file, preserving slice positions where possible."""
+        """Reload data while preserving the current view where possible."""
         if self._filepath is None:
             return False
         try:
@@ -3723,6 +3723,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         """Replace the displayed data, clamping slice positions to the new shape."""
         old_ndim = self.data.ndim
         new_ndim = new_data.ndim
+        previous_levels = self.img_view.getLevels()
+        previous_channel, previous_scale = self.channel, self.scale
 
         if new_ndim != old_ndim:
             # Per-dimension widgets were built for old_ndim and cannot be rebuilt in-place.
@@ -3800,7 +3802,9 @@ class NDSliceWindow(QtWidgets.QMainWindow):
 
         # Update spinbox maximums (auto-clamps current value)
         for i in range(new_ndim):
-            self.widgets['spins']['slice_indices'][i].setMaximum(new_data.shape[i] - 1)
+            spinbox = self.widgets['spins']['slice_indices'][i]
+            with QtCore.QSignalBlocker(spinbox):
+                spinbox.setMaximum(new_data.shape[i] - 1)
 
         # Clamp selected_indices: keep existing choices where still valid, fill from valid dims
         valid_dims = [i for i in range(new_ndim) if not self.singleton[i]]
@@ -3821,19 +3825,18 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                     self.line_plot_dimension = d
                     break
 
-        self.axis_flipped = [False] * new_ndim
-
         self._update_channel_controls()
         self.update_complex_indicators()
         if len(self.selected_indices) >= 1:
             self.changedIndex(True, 0, self.selected_indices[0], update=False)
         if len(self.selected_indices) >= 2:
             self.changedIndex(True, 1, self.selected_indices[1], update=False)
-        self._apply_initial_origin()
         self.update_dimension_controls()
-        self._force_autolevel = True
-        self._sync_header_control(auto_select=True)
+        self._sync_header_control()
         self.update()
+        if (previous_levels is not None
+                and (self.channel, self.scale) == (previous_channel, previous_scale)):
+            self.img_view.setLevels(*previous_levels)
 
 
 def _prepare_qt_environment():
