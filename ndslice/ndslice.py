@@ -551,6 +551,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                  selector_class_name=None, config_path=None, dim_labels=None,
                  voxel_spacing=None, overlay=None, metadata=None):
         super(NDSliceWindow, self).__init__()
+        self._initializing = True
         self.resize(800,800)
 
         self.data = data
@@ -1138,6 +1139,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self._apply_default_channel()
         self._apply_effective_colormap()
         self.update_dimension_controls()  # Initialize dimension controls properly
+        self._initializing = False
         self.update()
         self.show()
 
@@ -3106,6 +3108,8 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         return True
 
     def update(self):
+        if self._initializing:
+            return
         self.update_slice()
         self.update_image_view()
         self.update_line_plot()
