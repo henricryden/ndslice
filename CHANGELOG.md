@@ -4,10 +4,12 @@
 ## [0.11.0]
 
 ### Added
+- Dataset sidebar for HDF5, MAT and NPZ files.
 - Automatic DICOM header window/level display.
 - DICOM native-plane startup and A/C/S shortcuts for axial/coronal/sagittal views.
 
 ### Changed
+- Clickable value formatting modes.
 - Overlays support up to 255 sparse labels.
 - Renamed overlay arguments to Python `overlay=` and CLI `--overlay` throughout.
 
