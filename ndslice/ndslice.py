@@ -104,11 +104,38 @@ def symlog(data, C = 0):
 def asinh(data, linear_width = 1):
     return np.arcsinh( data / linear_width ) * linear_width
 
-def getNumberOfDecimalPlaces(number):
-    if isinstance(number, (int, np.integer)):
-        return int(0)
-    else:
-        return int(max(1, (number.as_integer_ratio()[1]).bit_length()))
+def format_pixel_value(value, mode='auto'):
+    """Format values with compact automatic or explicitly selected notation."""
+    if not np.isfinite(value):
+        return str(value)
+    if mode == 'scientific':
+        return f'{value:.2e}'
+    magnitude = abs(value)
+    if mode == 'decimal':
+        if value == int(value):
+            return str(int(value))
+        if magnitude < 0.01:
+            return np.format_float_positional(value, precision=6, unique=False,
+                                             fractional=False, trim='-')
+        return f'{value:.2f}'
+    if magnitude != 0 and (magnitude < 0.00001 or magnitude >= 1_000_000):
+        return f'{value:.2e}'
+    integer_digits = len(str(int(magnitude)))
+    decimals = min(2, max(0, 6 - integer_digits))
+    if 0 < magnitude < 0.01:
+        decimals = 5  # Include leading zeros within the six-digit budget.
+    if value == int(value):
+        decimals = 0
+    # Rounding can add an integer digit, so check the formatted result too.
+    while True:
+        text = f'{value:.{decimals}f}'
+        if sum(char.isdigit() for char in text) <= 6:
+            if 0 < magnitude < 0.01:
+                text = text.rstrip('0').rstrip('.')
+            return text
+        if decimals == 0:
+            return f'{value:.2e}'
+        decimals -= 1
 
 class Domain(Enum):
     INV_FOURIER=-1
@@ -597,6 +624,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
         self.metadata = cleaned_metadata
         self._pixel_value_scaling = self._metadata_applied_scaling()
         self._show_unscaled_pixel_values = False
+        self._pixel_value_format = 'auto'
         self._pixel_value_context = None
         self._has_conventional_metadata = bool(self.metadata) or any((
             filepath is not None,
@@ -1220,21 +1248,33 @@ class NDSliceWindow(QtWidgets.QMainWindow):
     def _configure_pixel_value_indicator(self):
         label = self.widgets['labels']['pixelValue']
         label.mousePressEvent = self._pixel_value_indicator_clicked
+        label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        modes = ('auto', 'scientific', 'decimal')
+        next_mode = modes[(modes.index(self._pixel_value_format) + 1) % len(modes)]
+        tooltip = f'Format: {self._pixel_value_format}. Click for {next_mode} notation.'
         transform, unavailable_reason = self._pixel_context_scaling()
         if self._pixel_value_scaling is None or (transform is None and unavailable_reason is None):
-            label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.ArrowCursor))
-            label.setToolTip('')
+            label.setToolTip(tooltip)
             return
-        label.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         if unavailable_reason:
             label.setToolTip(
-                "The current value cannot be unscaled; use Apply intensity scaling to reload raw values"
+                tooltip + "\nThe current value cannot be unscaled; use Apply intensity scaling to reload raw values"
             )
             return
         target = 'scaled' if self._show_unscaled_pixel_values else 'unscaled'
-        label.setToolTip(f"Click to show {target} pixel values")
+        label.setToolTip(tooltip + f"\nShift-click to show {target} pixel values")
 
     def _pixel_value_indicator_clicked(self, event):
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        if not (event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier):
+            modes = ('auto', 'scientific', 'decimal')
+            self._pixel_value_format = modes[(modes.index(self._pixel_value_format) + 1) % len(modes)]
+            self._configure_pixel_value_indicator()
+            self._refresh_pixel_value_indicator()
+            event.accept()
+            return
         transform, unavailable_reason = self._pixel_context_scaling()
         if transform is not None and unavailable_reason is None:
             self._show_unscaled_pixel_values = not self._show_unscaled_pixel_values
@@ -1286,13 +1326,7 @@ class NDSliceWindow(QtWidgets.QMainWindow):
                 slope, intercept = transform
                 value = (value - intercept) / slope
             value = self._transform_indicator_value(value)
-        decimal_places = getNumberOfDecimalPlaces(abs(value)) if np.isfinite(value) else 3
-        if decimal_places > 5:
-            value_text = f"{value:.3e}"
-        else:
-            max_decimal_places = 8 if kind == 'line' else decimal_places
-            decimal_places = min(max_decimal_places, max(0, decimal_places))
-            value_text = f"{value:.{decimal_places}f}"
+        value_text = format_pixel_value(value, self._pixel_value_format)
 
         if kind == 'image':
             x_i, y_i = position
