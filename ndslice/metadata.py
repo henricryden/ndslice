@@ -330,7 +330,7 @@ def build_metadata_model(
         source_rows.append(('Format', _friendly_format_name(detected_format)))
     source_path = metadata.get('source_path')
     if source_path not in (None, ''):
-        source_rows.append(('Source', _metadata_value_text(source_path)))
+        source_rows.append(('Source', str(Path(source_path).expanduser().absolute())))
     dataset_path = metadata.get('dataset_path')
     if dataset_path not in (None, ''):
         source_rows.append(('Dataset', _metadata_value_text(dataset_path)))
